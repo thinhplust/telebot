@@ -351,16 +351,29 @@ class JDownloaderClient {
 
   /**
    * Remove specific packages from download list (keeps files on disk)
+   * Per API: removeLinks(linkIds, packageIds) - linkIds first, packageIds second
    * @param {string} deviceId
    * @param {number[]} packageUUIDs - array of package UUIDs to remove
    */
   async removePackages(deviceId, packageUUIDs) {
-    return await this.callDevice(deviceId, 'downloadsV2', 'removeLinks', [packageUUIDs, []]);
+    if (!packageUUIDs || packageUUIDs.length === 0) return;
+
+    // Get all link UUIDs for these packages
+    const links = await this.callDevice(deviceId, 'downloadsV2', 'queryLinks', [{
+      packageUUIDs: packageUUIDs,
+      uuid: true,
+      maxResults: -1,
+      startAt: 0
+    }]);
+
+    const linkUUIDs = (links || []).map(l => l.uuid).filter(Boolean);
+
+    // removeLinks(linkIds, packageIds) - linkIds FIRST, packageIds SECOND
+    return await this.callDevice(deviceId, 'downloadsV2', 'removeLinks', [linkUUIDs, packageUUIDs]);
   }
 
   /**
    * Clean up finished downloads - removes from list, KEEPS files on disk
-   * Gets all finished packages and removes them via removeLinks
    */
   async cleanupFinished(deviceId) {
     const packages = await this.getDownloads(deviceId);
@@ -373,7 +386,7 @@ class JDownloaderClient {
 
     if (finishedUUIDs.length === 0) return;
 
-    return await this.callDevice(deviceId, 'downloadsV2', 'removeLinks', [finishedUUIDs, []]);
+    return await this.removePackages(deviceId, finishedUUIDs);
   }
 
   /**

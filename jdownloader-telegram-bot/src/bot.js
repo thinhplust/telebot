@@ -704,9 +704,16 @@ Control your JDownloader remotely via Telegram!
             try {
               await this.jd.removePackages(device.id, uuidsToRemove);
               removed = true;
-              console.log(`✅ Removed ${uuidsToRemove.length} finished package(s) from list`);
+              console.log(`✅ Removed ${uuidsToRemove.length} finished package(s) from list (files kept)`);
             } catch (e) {
               console.error('Failed to remove finished downloads:', e.message);
+              // Try cleanup as fallback
+              try {
+                await this.jd.cleanupFinished(device.id);
+                removed = true;
+              } catch (e2) {
+                console.error('Fallback cleanup also failed:', e2.message);
+              }
             }
           }
 

@@ -645,6 +645,7 @@ Control your JDownloader remotely via Telegram!
    */
   async _startDownloadMonitor() {
     const POLL_INTERVAL = 30000; // Check every 30 seconds
+    let initialized = false;
 
     const check = async () => {
       try {
@@ -653,7 +654,24 @@ Control your JDownloader remotely via Telegram!
         const device = await this._getDefaultDevice();
         const packages = await this.jd.getDownloads(device.id);
 
-        if (!packages || packages.length === 0) return;
+        if (!packages || packages.length === 0) {
+          initialized = true;
+          return;
+        }
+
+        // On first run: mark all currently finished packages as known
+        // (don't notify about downloads that were already finished before bot started)
+        if (!initialized) {
+          for (const pkg of packages) {
+            if (pkg.finished) {
+              const pkgId = pkg.uuid || pkg.name;
+              this.knownFinishedPackages.add(pkgId);
+            }
+          }
+          initialized = true;
+          console.log(`📡 Monitor initialized: ${this.knownFinishedPackages.size} existing finished package(s) noted`);
+          return;
+        }
 
         const newlyFinished = [];
 
@@ -678,19 +696,27 @@ Control your JDownloader remotely via Telegram!
             }
             msg += '\n';
           });
-          msg += '🗑️ Removing from download list (files kept on disk)...';
+
+          // Remove newly finished packages from list (keep files)
+          const uuidsToRemove = newlyFinished.map(p => p.uuid).filter(Boolean);
+          let removed = false;
+          if (uuidsToRemove.length > 0) {
+            try {
+              await this.jd.removePackages(device.id, uuidsToRemove);
+              removed = true;
+              console.log(`✅ Removed ${uuidsToRemove.length} finished package(s) from list`);
+            } catch (e) {
+              console.error('Failed to remove finished downloads:', e.message);
+            }
+          }
+
+          msg += removed
+            ? '✅ Removed from download list (files kept on disk)'
+            : '⚠️ Could not remove from list automatically — use /cleanup';
 
           // Notify all active chat IDs
           for (const chatId of this.activeChatIds) {
             await this._send(chatId, msg);
-          }
-
-          // Remove finished packages from list (keep files)
-          try {
-            await this.jd.cleanupFinishedKeepFiles(device.id);
-            console.log(`✅ Removed ${newlyFinished.length} finished package(s) from list`);
-          } catch (e) {
-            console.error('Failed to cleanup finished downloads:', e.message);
           }
         }
       } catch (e) {
@@ -703,6 +729,8 @@ Control your JDownloader remotely via Telegram!
 
     // Start polling
     setInterval(check, POLL_INTERVAL);
+    // Run first check immediately to initialize known packages
+    setTimeout(check, 5000);
     console.log(`📡 Download monitor started (checking every ${POLL_INTERVAL / 1000}s)`);
   }
 

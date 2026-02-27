@@ -25,56 +25,46 @@ class JDownloaderClient {
 
   /**
    * Create login secret from email + password + domain
+   * Returns hex string (64 chars = 32 bytes)
    */
   _createSecret(email, password, domain) {
     const data = email.toLowerCase() + password + domain.toLowerCase();
-    // Return as hex string for use as HMAC key
     return CryptoJS.enc.Hex.stringify(CryptoJS.SHA256(data));
   }
 
   /**
-   * Create device secret from login secret
+   * Update encryption token: SHA256(currentToken_bytes + update_bytes)
+   * Per MyJDownloader API: new_token = SHA256(old_token + session_token)
+   * @param {string} tokenHex - current token as hex string
+   * @param {string} updateHex - session/regain token as hex string
+   * @returns {string} new token as hex string
    */
-  _createDeviceSecret(loginSecret) {
-    const data = CryptoJS.enc.Hex.stringify(loginSecret) + 'device';
-    return CryptoJS.SHA256(data);
-  }
-
-  /**
-   * Update encryption token using HMAC-SHA256
-   * @param {string} token - current token as hex string
-   * @param {string} update - session token (hex string) or rid (decimal string)
-   */
-  _updateToken(token, update) {
-    // token is a hex string
-    // update: if it looks like a hex string (64 chars), parse as hex; otherwise encode as UTF-8
-    let updateBytes;
-    if (/^[0-9a-fA-F]{64}$/.test(update)) {
-      updateBytes = CryptoJS.enc.Hex.parse(update);
-    } else {
-      updateBytes = CryptoJS.enc.Utf8.parse(update);
-    }
-    const hmac = CryptoJS.HmacSHA256(
-      updateBytes,
-      CryptoJS.enc.Hex.parse(token)
+  _updateToken(tokenHex, updateHex) {
+    return CryptoJS.enc.Hex.stringify(
+      CryptoJS.SHA256(CryptoJS.enc.Hex.parse(tokenHex + updateHex))
     );
-    return CryptoJS.enc.Hex.stringify(hmac);
   }
 
   /**
-   * Sign a request path with HMAC-SHA256
+   * Sign a request: HMAC-SHA256(data, key_bytes)
+   * @param {string} keyHex - key as hex string
+   * @param {string} data - string to sign
+   * @returns {string} signature as hex string
    */
-  _sign(key, data) {
-    // key is a hex string
-    return CryptoJS.HmacSHA256(data, CryptoJS.enc.Hex.parse(key));
+  _sign(keyHex, data) {
+    return CryptoJS.enc.Hex.stringify(
+      CryptoJS.HmacSHA256(data, CryptoJS.enc.Hex.parse(keyHex))
+    );
   }
 
   /**
-   * Encrypt request body using AES-128-CBC
+   * Encrypt data using AES-128-CBC
+   * IV = first 16 bytes of token, Key = last 16 bytes of token
+   * @param {string} data - plaintext string
+   * @param {string} tokenHex - 64-char hex string (32 bytes)
+   * @returns {string} base64-encoded ciphertext
    */
-  _encrypt(data, token) {
-    // token is a hex string (64 hex chars = 32 bytes)
-    const tokenHex = token;
+  _encrypt(data, tokenHex) {
     const iv = CryptoJS.enc.Hex.parse(tokenHex.substring(0, 32));
     const key = CryptoJS.enc.Hex.parse(tokenHex.substring(32, 64));
     const encrypted = CryptoJS.AES.encrypt(data, key, {
@@ -86,11 +76,13 @@ class JDownloaderClient {
   }
 
   /**
-   * Decrypt response body using AES-128-CBC
+   * Decrypt data using AES-128-CBC
+   * IV = first 16 bytes of token, Key = last 16 bytes of token
+   * @param {string} data - base64-encoded ciphertext
+   * @param {string} tokenHex - 64-char hex string (32 bytes)
+   * @returns {string} decrypted plaintext
    */
-  _decrypt(data, token) {
-    // token is a hex string (64 hex chars = 32 bytes)
-    const tokenHex = token;
+  _decrypt(data, tokenHex) {
     const iv = CryptoJS.enc.Hex.parse(tokenHex.substring(0, 32));
     const key = CryptoJS.enc.Hex.parse(tokenHex.substring(32, 64));
     const decrypted = CryptoJS.AES.decrypt(data, key, {
@@ -102,29 +94,16 @@ class JDownloaderClient {
   }
 
   /**
-   * Make an API call to the server endpoint
+   * Build a signed server API URL
+   * Per API docs: signature = HMAC-SHA256(path?queryString, encryptionToken)
    */
-  async _callServer(path, params = {}) {
-    const rid = Date.now();
-
-    const allParams = { ...params, rid: rid.toString() };
-    const queryString = Object.entries(allParams)
+  _buildSignedUrl(path, params, tokenHex) {
+    const queryString = Object.entries(params)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
-
-    // Per MyJDownloader API docs: sign the full query string (path?params)
     const signData = `${path}?${queryString}`;
-    const tokenHex = this.serverEncryptionToken || this._createSecret(this.email, this.password, 'server');
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(tokenHex));
-
-    const fullUrl = `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`;
-
-    try {
-      const response = await axios.get(fullUrl);
-      return response.data;
-    } catch (error) {
-      throw new Error(`Server API call failed: ${error.message}`);
-    }
+    const signature = this._sign(tokenHex, signData);
+    return `${API_BASE}${path}?${queryString}&signature=${signature}`;
   }
 
   /**
@@ -134,32 +113,23 @@ class JDownloaderClient {
     this.email = email;
     this.password = password;
 
-    // loginSecret and deviceSecret are hex strings
+    // Compute secrets (hex strings, 64 chars = 32 bytes each)
     const loginSecret = this._createSecret(email, password, 'server');
     const deviceSecret = this._createSecret(email, password, 'device');
 
     const rid = Date.now();
-    const path = '/my/connect';
-
-    const params = {
+    const url = this._buildSignedUrl('/my/connect', {
       email: email,
       appkey: APP_KEY,
       rid: rid.toString()
-    };
-
-    const queryString = Object.entries(params)
-      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
-      .join('&');
-
-    // Per MyJDownloader API docs: sign the full query string (path?params)
-    const signData = `${path}?${queryString}`;
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(loginSecret));
-
-    const url = `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`;
+    }, loginSecret);
 
     try {
       const response = await axios.get(url);
-      const data = response.data;
+
+      // Response is AES-encrypted with the login secret
+      const decryptedStr = this._decrypt(response.data, loginSecret);
+      const data = JSON.parse(decryptedStr);
 
       if (data.error) {
         throw new Error(`Login failed: ${data.error}`);
@@ -168,7 +138,7 @@ class JDownloaderClient {
       this.sessionToken = data.sessiontoken;
       this.regainToken = data.regaintoken;
 
-      // Update encryption tokens (returns hex strings)
+      // Update encryption tokens: SHA256(secret + sessionToken)
       this.serverEncryptionToken = this._updateToken(loginSecret, this.sessionToken);
       this.deviceEncryptionToken = this._updateToken(deviceSecret, this.sessionToken);
 
@@ -189,23 +159,13 @@ class JDownloaderClient {
     if (!this.connected) return;
 
     const rid = Date.now();
-    const path = '/my/disconnect';
-
-    const params = {
+    const url = this._buildSignedUrl('/my/disconnect', {
       sessiontoken: this.sessionToken,
       rid: rid.toString()
-    };
-
-    const queryString = Object.entries(params)
-      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
-      .join('&');
-
-    // Per MyJDownloader API docs: sign the full query string (path?params)
-    const signData = `${path}?${queryString}`;
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
+    }, this.serverEncryptionToken);
 
     try {
-      await axios.get(`${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`);
+      await axios.get(url);
     } catch (e) {
       // Ignore disconnect errors
     }
@@ -221,26 +181,17 @@ class JDownloaderClient {
     if (!this.connected) throw new Error('Not connected. Call connect() first.');
 
     const rid = Date.now();
-    const path = '/my/listdevices';
-
-    const params = {
+    const url = this._buildSignedUrl('/my/listdevices', {
       sessiontoken: this.sessionToken,
       rid: rid.toString()
-    };
-
-    const queryString = Object.entries(params)
-      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
-      .join('&');
-
-    // Per MyJDownloader API docs: sign the full query string (path?params)
-    const signData = `${path}?${queryString}`;
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
+    }, this.serverEncryptionToken);
 
     try {
-      const response = await axios.get(
-        `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`
-      );
-      return response.data.list || [];
+      const response = await axios.get(url);
+      // Response is AES-encrypted with the server encryption token
+      const decryptedStr = this._decrypt(response.data, this.serverEncryptionToken);
+      const data = JSON.parse(decryptedStr);
+      return data.list || [];
     } catch (error) {
       throw new Error(`Failed to list devices: ${error.message}`);
     }
@@ -265,8 +216,7 @@ class JDownloaderClient {
     const encryptedBody = this._encrypt(requestBody, this.deviceEncryptionToken);
 
     const signData = path + rid + encryptedBody;
-    // deviceEncryptionToken is a hex string
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.deviceEncryptionToken));
+    const signature = this._sign(this.deviceEncryptionToken, signData);
 
     try {
       const response = await axios.post(
@@ -275,7 +225,7 @@ class JDownloaderClient {
         {
           headers: {
             'Content-Type': 'application/aesjson-jd; charset=utf-8',
-            'signature': CryptoJS.enc.Hex.stringify(signature)
+            'signature': signature
           }
         }
       );
@@ -283,8 +233,11 @@ class JDownloaderClient {
       const decrypted = this._decrypt(response.data, this.deviceEncryptionToken);
       const result = JSON.parse(decrypted);
 
-      // Update device encryption token (returns hex string)
-      this.deviceEncryptionToken = this._updateToken(this.deviceEncryptionToken, result.rid.toString());
+      // Update device encryption token after each call
+      this.deviceEncryptionToken = this._updateToken(
+        this.deviceEncryptionToken,
+        result.rid.toString(16).padStart(2, '0')
+      );
 
       return result.data;
     } catch (error) {

@@ -55,15 +55,16 @@ class JDownloaderTelegramBot {
   }
 
   /**
-   * Get the default device (first online device)
+   * Get the default device (first online or available device)
    */
   async _getDefaultDevice() {
     const devices = await this._getDevices();
-    const online = devices.filter(d => d.status === 'ONLINE');
-    if (online.length === 0) {
+    // Accept ONLINE or UNKNOWN status (UNKNOWN means JD is connected but status not yet determined)
+    const available = devices.filter(d => d.status === 'ONLINE' || d.status === 'UNKNOWN');
+    if (available.length === 0) {
       throw new Error('No online JDownloader devices found.');
     }
-    return online[0];
+    return available[0];
   }
 
   /**
@@ -593,11 +594,13 @@ Control your JDownloader remotely via Telegram!
 
       // List devices
       const devices = await this.jd.listDevices();
-      const online = devices.filter(d => d.status === 'ONLINE');
-      console.log(`📱 Found ${devices.length} device(s), ${online.length} online`);
+      const online = devices.filter(d => d.status === 'ONLINE' || d.status === 'UNKNOWN');
+      console.log(`📱 Found ${devices.length} device(s), ${online.length} available`);
 
       if (online.length > 0) {
-        console.log(`   Active device: ${online[0].name}`);
+        console.log(`   Active device: ${online[0].name} (${online[0].status})`);
+      } else {
+        console.log('   ⚠️  No devices available. Make sure JDownloader is running.');
       }
 
       console.log('\n🚀 Bot is running! Press Ctrl+C to stop.\n');
@@ -605,8 +608,10 @@ Control your JDownloader remotely via Telegram!
       console.error('❌ Startup error:', error.message);
       if (error.message.includes('Login failed') || error.message.includes('UNAUTHORIZED')) {
         console.error('Check your MyJDownloader credentials in .env file');
+        process.exit(1);
       }
-      process.exit(1);
+      // Don't exit for device listing errors - bot can still run
+      console.log('⚠️  Continuing anyway - bot will retry on first command.\n');
     }
   }
 }

@@ -233,11 +233,8 @@ class JDownloaderClient {
       const decrypted = this._decrypt(response.data, this.deviceEncryptionToken);
       const result = JSON.parse(decrypted);
 
-      // Update device encryption token after each call
-      this.deviceEncryptionToken = this._updateToken(
-        this.deviceEncryptionToken,
-        result.rid.toString(16).padStart(2, '0')
-      );
+      // Note: device encryption token is NOT updated between calls
+      // It remains constant for the entire session
 
       return result.data;
     } catch (error) {

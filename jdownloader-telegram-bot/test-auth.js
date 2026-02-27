@@ -19,19 +19,16 @@ if (!email || !password) {
 }
 
 console.log('=== MyJDownloader Auth Debug ===');
-console.log(`Email: ${email}`);
+console.log(`Email: "${email}"`);
 console.log(`Password length: ${password.length} chars`);
 console.log('');
 
 async function testAuth() {
-  // Step 1: Compute login secret
+  // Step 1: Compute login secret (SHA256 WordArray = raw bytes)
   const rawData = email.toLowerCase() + password + 'server';
-  console.log('Raw secret data:', rawData);
-  
-  const loginSecretWordArray = CryptoJS.SHA256(rawData);
-  const loginSecretHex = CryptoJS.enc.Hex.stringify(loginSecretWordArray);
+  const loginSecret = CryptoJS.SHA256(rawData);
+  const loginSecretHex = CryptoJS.enc.Hex.stringify(loginSecret);
   console.log('Login secret (hex):', loginSecretHex);
-  console.log('Login secret length:', loginSecretHex.length, '(should be 64)');
   console.log('');
 
   // Step 2: Build request
@@ -48,11 +45,11 @@ async function testAuth() {
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
     .join('&');
 
-  // Step 3: Compute signature
-  const signData = `${path}${rid}`;
+  // Step 3: Sign the FULL query string (path?params) per API docs
+  const signData = `${path}?${queryString}`;
   console.log('Sign data:', signData);
   
-  const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(loginSecretHex));
+  const signature = CryptoJS.HmacSHA256(signData, loginSecret);
   const signatureHex = CryptoJS.enc.Hex.stringify(signature);
   console.log('Signature:', signatureHex);
   console.log('');

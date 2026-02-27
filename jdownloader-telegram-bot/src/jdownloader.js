@@ -106,21 +106,21 @@ class JDownloaderClient {
    */
   async _callServer(path, params = {}) {
     const rid = Date.now();
-    const url = `${API_BASE}${path}`;
 
-    const queryParams = new URLSearchParams({
-      ...params,
-      rid: rid.toString()
-    });
+    const allParams = { ...params, rid: rid.toString() };
+    const queryString = Object.entries(allParams)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join('&');
 
-    const signData = `${path}${rid}`;
+    // Per MyJDownloader API docs: sign the full query string (path?params)
+    const signData = `${path}?${queryString}`;
     const tokenHex = this.serverEncryptionToken || this._createSecret(this.email, this.password, 'server');
     const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(tokenHex));
 
-    queryParams.append('signature', CryptoJS.enc.Hex.stringify(signature));
+    const fullUrl = `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`;
 
     try {
-      const response = await axios.get(`${url}?${queryParams.toString()}`);
+      const response = await axios.get(fullUrl);
       return response.data;
     } catch (error) {
       throw new Error(`Server API call failed: ${error.message}`);
@@ -151,8 +151,8 @@ class JDownloaderClient {
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
 
-    const signData = `${path}${rid}`;
-    // Use hex string key for HMAC
+    // Per MyJDownloader API docs: sign the full query string (path?params)
+    const signData = `${path}?${queryString}`;
     const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(loginSecret));
 
     const url = `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`;
@@ -200,8 +200,8 @@ class JDownloaderClient {
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
 
-    const signData = `${path}${rid}`;
-    // serverEncryptionToken is a hex string
+    // Per MyJDownloader API docs: sign the full query string (path?params)
+    const signData = `${path}?${queryString}`;
     const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
 
     try {
@@ -232,8 +232,8 @@ class JDownloaderClient {
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join('&');
 
-    const signData = `${path}${rid}`;
-    // serverEncryptionToken is a hex string
+    // Per MyJDownloader API docs: sign the full query string (path?params)
+    const signData = `${path}?${queryString}`;
     const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
 
     try {

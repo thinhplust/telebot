@@ -350,7 +350,7 @@ class JDownloaderClient {
   }
 
   /**
-   * Clean up finished downloads
+   * Clean up finished downloads (removes from list AND deletes files)
    */
   async cleanupFinished(deviceId) {
     return await this.callDevice(deviceId, 'downloadsV2', 'cleanup', [
@@ -358,6 +358,26 @@ class JDownloaderClient {
       'REMOVE_LINKS_AND_DELETE_FILES',
       'ALL'
     ]);
+  }
+
+  /**
+   * Remove finished downloads from list but KEEP files on disk
+   */
+  async cleanupFinishedKeepFiles(deviceId) {
+    return await this.callDevice(deviceId, 'downloadsV2', 'cleanup', [
+      'DELETE_FINISHED_LINKS_AND_EMPTY_PACKAGES',
+      'REMOVE_LINKS_ONLY',
+      'ALL'
+    ]);
+  }
+
+  /**
+   * Remove specific packages from download list (keeps files)
+   * @param {string} deviceId
+   * @param {number[]} packageUUIDs - array of package UUIDs to remove
+   */
+  async removePackagesKeepFiles(deviceId, packageUUIDs) {
+    return await this.callDevice(deviceId, 'downloadsV2', 'removeLinks', [packageUUIDs, []]);
   }
 
   /**

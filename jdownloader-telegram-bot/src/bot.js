@@ -15,6 +15,15 @@ class JDownloaderTelegramBot {
     this.deviceCacheTime = 0;
     this.CACHE_TTL = 60000; // 1 minute cache
 
+    // Track known finished packages to avoid duplicate notifications
+    this.knownFinishedPackages = new Set();
+    // Store chat IDs that have interacted with the bot (for notifications)
+    this.activeChatIds = new Set();
+    // Load allowed users as active chat IDs if configured
+    if (config.allowedUsers && config.allowedUsers.length > 0) {
+      config.allowedUsers.forEach(id => this.activeChatIds.add(id));
+    }
+
     this._setupCommands();
     this._setupErrorHandling();
   }
@@ -106,6 +115,13 @@ class JDownloaderTelegramBot {
    * Setup all bot commands
    */
   _setupCommands() {
+    // Track all authorized users who interact with the bot
+    this.bot.on('message', (msg) => {
+      if (msg.chat && msg.chat.id && this._isAuthorized(msg.chat.id)) {
+        this.activeChatIds.add(msg.chat.id.toString());
+      }
+    });
+
     // /start - Welcome message
     this.bot.onText(/\/start/, async (msg) => {
       const chatId = msg.chat.id;
@@ -625,6 +641,72 @@ Control your JDownloader remotely via Telegram!
   }
 
   /**
+   * Monitor downloads and notify when completed, then remove from list (keep files)
+   */
+  async _startDownloadMonitor() {
+    const POLL_INTERVAL = 30000; // Check every 30 seconds
+
+    const check = async () => {
+      try {
+        if (!this.jd.connected) return;
+
+        const device = await this._getDefaultDevice();
+        const packages = await this.jd.getDownloads(device.id);
+
+        if (!packages || packages.length === 0) return;
+
+        const newlyFinished = [];
+
+        for (const pkg of packages) {
+          const pkgId = pkg.uuid || pkg.name;
+          if (pkg.finished && !this.knownFinishedPackages.has(pkgId)) {
+            newlyFinished.push(pkg);
+            this.knownFinishedPackages.add(pkgId);
+          }
+        }
+
+        if (newlyFinished.length > 0) {
+          // Build notification message
+          let msg = `✅ <b>${newlyFinished.length} download(s) completed!</b>\n\n`;
+          newlyFinished.forEach((pkg, i) => {
+            msg += `${i + 1}. 📁 <b>${this._escapeHtml(pkg.name || 'Unknown')}</b>\n`;
+            if (pkg.bytesTotal > 0) {
+              msg += `   Size: ${JDownloaderClient.formatBytes(pkg.bytesTotal)}\n`;
+            }
+            if (pkg.saveTo) {
+              msg += `   Saved to: <code>${this._escapeHtml(pkg.saveTo)}</code>\n`;
+            }
+            msg += '\n';
+          });
+          msg += '🗑️ Removing from download list (files kept on disk)...';
+
+          // Notify all active chat IDs
+          for (const chatId of this.activeChatIds) {
+            await this._send(chatId, msg);
+          }
+
+          // Remove finished packages from list (keep files)
+          try {
+            await this.jd.cleanupFinishedKeepFiles(device.id);
+            console.log(`✅ Removed ${newlyFinished.length} finished package(s) from list`);
+          } catch (e) {
+            console.error('Failed to cleanup finished downloads:', e.message);
+          }
+        }
+      } catch (e) {
+        // Silently ignore monitor errors (device offline, etc.)
+        if (e.message && !e.message.includes('No online')) {
+          console.error('Download monitor error:', e.message);
+        }
+      }
+    };
+
+    // Start polling
+    setInterval(check, POLL_INTERVAL);
+    console.log(`📡 Download monitor started (checking every ${POLL_INTERVAL / 1000}s)`);
+  }
+
+  /**
    * Start the bot
    */
   async start() {
@@ -651,6 +733,9 @@ Control your JDownloader remotely via Telegram!
         console.log('   ⚠️  No devices available. Make sure JDownloader is running.');
       }
 
+      // Start download completion monitor
+      this._startDownloadMonitor();
+
       console.log('\n🚀 Bot is running! Press Ctrl+C to stop.\n');
     } catch (error) {
       console.error('❌ Startup error:', error.message);
@@ -660,6 +745,8 @@ Control your JDownloader remotely via Telegram!
       }
       // Don't exit for device listing errors - bot can still run
       console.log('⚠️  Continuing anyway - bot will retry on first command.\n');
+      // Still start the monitor even if initial device listing failed
+      this._startDownloadMonitor();
     }
   }
 }

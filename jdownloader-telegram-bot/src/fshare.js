@@ -1,18 +1,24 @@
 /**
  * Fshare.vn API Client
  * Gets account information including remaining bandwidth
+ *
+ * To get your app_key and user_agent:
+ * 1. Go to https://www.fshare.vn/developer
+ * 2. Create an app to get your app_key
+ * 3. Set the app name as your user_agent
  */
 
 const axios = require('axios');
 
 const FSHARE_API = 'https://api2.fshare.vn/api';
-const APP_KEY = 'L2S7R6ZMagggDo41';
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 
 class FshareClient {
-  constructor() {
+  constructor(appKey, userAgent) {
     this.token = null;
     this.sessionId = null;
+    // Use provided credentials or defaults from env
+    this.appKey = appKey || process.env.FSHARE_APP_KEY || 'dMnqMMZMUnN5YpvKENaEhdQQ5jxDqddt';
+    this.userAgent = userAgent || process.env.FSHARE_USER_AGENT || 'THINHNdg5';
   }
 
   /**
@@ -25,10 +31,10 @@ class FshareClient {
       const response = await axios.post(`${FSHARE_API}/user/login`, {
         user_email: email,
         password: password,
-        app_key: APP_KEY
+        app_key: this.appKey
       }, {
         headers: {
-          'User-Agent': USER_AGENT,
+          'User-Agent': this.userAgent,
           'Content-Type': 'application/json'
         }
       });
@@ -39,12 +45,13 @@ class FshareClient {
         this.sessionId = data.session_id;
         return true;
       }
-      throw new Error(data.msg || 'Login failed');
+      throw new Error(data.msg || `Login failed (code: ${data.code})`);
     } catch (error) {
       if (error.response) {
         throw new Error(`Fshare login failed: ${JSON.stringify(error.response.data)}`);
       }
-      throw error;
+      if (error.message) throw error;
+      throw new Error('Fshare login failed');
     }
   }
 
@@ -57,7 +64,7 @@ class FshareClient {
     try {
       const response = await axios.get(`${FSHARE_API}/user/get`, {
         headers: {
-          'User-Agent': USER_AGENT,
+          'User-Agent': this.userAgent,
           'Cookie': `session_id=${this.sessionId}`,
           'Token': this.token
         }

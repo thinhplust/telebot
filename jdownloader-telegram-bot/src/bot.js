@@ -28,8 +28,8 @@ class JDownloaderTelegramBot {
     }
     // Daily summary stats
     this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: new Date().toDateString() };
-    // Fshare client
-    this.fshare = new FshareClient();
+    // Fshare client (use configured app key and user agent)
+    this.fshare = new FshareClient(config.fshareAppKey, config.fshareUserAgent);
 
     this._setupCommands();
     this._setupErrorHandling();

@@ -29,6 +29,8 @@ const config = {
   // Optional Fshare credentials
   fshareEmail: process.env.FSHARE_EMAIL || null,
   fsharePassword: process.env.FSHARE_PASSWORD || null,
+  fshareAppKey: process.env.FSHARE_APP_KEY || null,
+  fshareUserAgent: process.env.FSHARE_USER_AGENT || null,
   // Daily report time (e.g. "08:00")
   dailyReportTime: process.env.DAILY_REPORT_TIME || null
 };

@@ -28,7 +28,8 @@ class JDownloaderClient {
    */
   _createSecret(email, password, domain) {
     const data = email.toLowerCase() + password + domain.toLowerCase();
-    return CryptoJS.SHA256(data);
+    // Return as hex string for use as HMAC key
+    return CryptoJS.enc.Hex.stringify(CryptoJS.SHA256(data));
   }
 
   /**
@@ -41,27 +42,39 @@ class JDownloaderClient {
 
   /**
    * Update encryption token using HMAC-SHA256
+   * @param {string} token - current token as hex string
+   * @param {string} update - session token (hex string) or rid (decimal string)
    */
   _updateToken(token, update) {
+    // token is a hex string
+    // update: if it looks like a hex string (64 chars), parse as hex; otherwise encode as UTF-8
+    let updateBytes;
+    if (/^[0-9a-fA-F]{64}$/.test(update)) {
+      updateBytes = CryptoJS.enc.Hex.parse(update);
+    } else {
+      updateBytes = CryptoJS.enc.Utf8.parse(update);
+    }
     const hmac = CryptoJS.HmacSHA256(
-      CryptoJS.enc.Hex.parse(update),
-      CryptoJS.enc.Hex.parse(CryptoJS.enc.Hex.stringify(token))
+      updateBytes,
+      CryptoJS.enc.Hex.parse(token)
     );
-    return hmac;
+    return CryptoJS.enc.Hex.stringify(hmac);
   }
 
   /**
    * Sign a request path with HMAC-SHA256
    */
   _sign(key, data) {
-    return CryptoJS.HmacSHA256(data, CryptoJS.enc.Hex.parse(CryptoJS.enc.Hex.stringify(key)));
+    // key is a hex string
+    return CryptoJS.HmacSHA256(data, CryptoJS.enc.Hex.parse(key));
   }
 
   /**
    * Encrypt request body using AES-128-CBC
    */
   _encrypt(data, token) {
-    const tokenHex = CryptoJS.enc.Hex.stringify(token);
+    // token is a hex string (64 hex chars = 32 bytes)
+    const tokenHex = token;
     const iv = CryptoJS.enc.Hex.parse(tokenHex.substring(0, 32));
     const key = CryptoJS.enc.Hex.parse(tokenHex.substring(32, 64));
     const encrypted = CryptoJS.AES.encrypt(data, key, {
@@ -76,7 +89,8 @@ class JDownloaderClient {
    * Decrypt response body using AES-128-CBC
    */
   _decrypt(data, token) {
-    const tokenHex = CryptoJS.enc.Hex.stringify(token);
+    // token is a hex string (64 hex chars = 32 bytes)
+    const tokenHex = token;
     const iv = CryptoJS.enc.Hex.parse(tokenHex.substring(0, 32));
     const key = CryptoJS.enc.Hex.parse(tokenHex.substring(32, 64));
     const decrypted = CryptoJS.AES.decrypt(data, key, {
@@ -100,9 +114,8 @@ class JDownloaderClient {
     });
 
     const signData = `${path}${rid}`;
-    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(
-      CryptoJS.enc.Hex.stringify(this.serverEncryptionToken || this._createSecret(this.email, this.password, 'server'))
-    ));
+    const tokenHex = this.serverEncryptionToken || this._createSecret(this.email, this.password, 'server');
+    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(tokenHex));
 
     queryParams.append('signature', CryptoJS.enc.Hex.stringify(signature));
 
@@ -121,6 +134,7 @@ class JDownloaderClient {
     this.email = email;
     this.password = password;
 
+    // loginSecret and deviceSecret are hex strings
     const loginSecret = this._createSecret(email, password, 'server');
     const deviceSecret = this._createSecret(email, password, 'device');
 
@@ -138,7 +152,8 @@ class JDownloaderClient {
       .join('&');
 
     const signData = `${path}${rid}`;
-    const signature = CryptoJS.HmacSHA256(signData, loginSecret);
+    // Use hex string key for HMAC
+    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(loginSecret));
 
     const url = `${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`;
 
@@ -153,7 +168,7 @@ class JDownloaderClient {
       this.sessionToken = data.sessiontoken;
       this.regainToken = data.regaintoken;
 
-      // Update encryption tokens
+      // Update encryption tokens (returns hex strings)
       this.serverEncryptionToken = this._updateToken(loginSecret, this.sessionToken);
       this.deviceEncryptionToken = this._updateToken(deviceSecret, this.sessionToken);
 
@@ -186,7 +201,8 @@ class JDownloaderClient {
       .join('&');
 
     const signData = `${path}${rid}`;
-    const signature = CryptoJS.HmacSHA256(signData, this.serverEncryptionToken);
+    // serverEncryptionToken is a hex string
+    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
 
     try {
       await axios.get(`${API_BASE}${path}?${queryString}&signature=${CryptoJS.enc.Hex.stringify(signature)}`);
@@ -217,7 +233,8 @@ class JDownloaderClient {
       .join('&');
 
     const signData = `${path}${rid}`;
-    const signature = CryptoJS.HmacSHA256(signData, this.serverEncryptionToken);
+    // serverEncryptionToken is a hex string
+    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.serverEncryptionToken));
 
     try {
       const response = await axios.get(
@@ -248,7 +265,8 @@ class JDownloaderClient {
     const encryptedBody = this._encrypt(requestBody, this.deviceEncryptionToken);
 
     const signData = path + rid + encryptedBody;
-    const signature = CryptoJS.HmacSHA256(signData, this.deviceEncryptionToken);
+    // deviceEncryptionToken is a hex string
+    const signature = CryptoJS.HmacSHA256(signData, CryptoJS.enc.Hex.parse(this.deviceEncryptionToken));
 
     try {
       const response = await axios.post(
@@ -265,7 +283,7 @@ class JDownloaderClient {
       const decrypted = this._decrypt(response.data, this.deviceEncryptionToken);
       const result = JSON.parse(decrypted);
 
-      // Update device encryption token
+      // Update device encryption token (returns hex string)
       this.deviceEncryptionToken = this._updateToken(this.deviceEncryptionToken, result.rid.toString());
 
       return result.data;

@@ -510,16 +510,18 @@ Control your JDownloader remotely via Telegram!
       if (!this._isAuthorized(chatId)) return;
       if (msg.text && msg.text.startsWith('/')) return; // Skip commands
 
-      // Check if message contains URLs
-      const urlRegex = /(https?:\/\/[^\s]+)/g;
-      const urls = msg.text ? msg.text.match(urlRegex) : null;
+      // Extract URLs from message text and Telegram entities
+      const urls = this._extractUrls(msg);
 
       if (urls && urls.length > 0) {
         try {
-          await this._send(chatId, `🔍 Detected ${urls.length} URL(s). Adding to JDownloader...`);
+          const urlList = urls.join('\n');
+          const isFshare = urls.some(u => u.includes('fshare.vn'));
+          const label = isFshare ? '🔗 Fshare' : '🔍 URL';
+          await this._send(chatId, `${label} Detected ${urls.length} link(s). Adding to JDownloader...`);
           const device = await this._getDefaultDevice();
-          await this.jd.addLinks(device.id, urls.join('\n'));
-          await this._send(chatId, `✅ Added <b>${urls.length}</b> link(s) to JDownloader!\nDevice: <code>${device.name}</code>`);
+          await this.jd.addLinks(device.id, urlList);
+          await this._send(chatId, `✅ Added <b>${urls.length}</b> link(s) to JDownloader!\nDevice: <code>${device.name}</code>\n\n${urls.map(u => `• <code>${this._escapeHtml(u)}</code>`).join('\n')}`);
         } catch (error) {
           await this._handleError(chatId, error);
         }
@@ -554,6 +556,52 @@ Control your JDownloader remotely via Telegram!
       await this.jd.disconnect();
       process.exit(0);
     });
+  }
+
+  /**
+   * Extract all URLs from a Telegram message (text + entities)
+   */
+  _extractUrls(msg) {
+    const urlSet = new Set();
+
+    // Extract from text using regex
+    if (msg.text) {
+      const urlRegex = /(https?:\/\/[^\s<>'"]+)/g;
+      const matches = msg.text.match(urlRegex);
+      if (matches) matches.forEach(u => urlSet.add(u.replace(/[.,;!?]+$/, '')));
+    }
+
+    // Extract from Telegram entities (url and text_link types)
+    if (msg.entities && msg.text) {
+      for (const entity of msg.entities) {
+        if (entity.type === 'url') {
+          const url = msg.text.substring(entity.offset, entity.offset + entity.length);
+          urlSet.add(url);
+        } else if (entity.type === 'text_link' && entity.url) {
+          urlSet.add(entity.url);
+        }
+      }
+    }
+
+    // Extract from caption (for photo/video messages with caption)
+    if (msg.caption) {
+      const urlRegex = /(https?:\/\/[^\s<>'"]+)/g;
+      const matches = msg.caption.match(urlRegex);
+      if (matches) matches.forEach(u => urlSet.add(u.replace(/[.,;!?]+$/, '')));
+    }
+
+    if (msg.caption_entities) {
+      for (const entity of msg.caption_entities) {
+        if (entity.type === 'url' && msg.caption) {
+          const url = msg.caption.substring(entity.offset, entity.offset + entity.length);
+          urlSet.add(url);
+        } else if (entity.type === 'text_link' && entity.url) {
+          urlSet.add(entity.url);
+        }
+      }
+    }
+
+    return Array.from(urlSet).filter(u => u.startsWith('http'));
   }
 
   /**

@@ -5,6 +5,7 @@
 
 const TelegramBot = require('node-telegram-bot-api');
 const JDownloaderClient = require('./jdownloader');
+const FshareClient = require('./fshare');
 
 class JDownloaderTelegramBot {
   constructor(config) {
@@ -17,12 +18,18 @@ class JDownloaderTelegramBot {
 
     // Track known finished packages to avoid duplicate notifications
     this.knownFinishedPackages = new Set();
+    // Track known failed packages to avoid duplicate error notifications
+    this.knownFailedPackages = new Set();
     // Store chat IDs that have interacted with the bot (for notifications)
     this.activeChatIds = new Set();
     // Load allowed users as active chat IDs if configured
     if (config.allowedUsers && config.allowedUsers.length > 0) {
       config.allowedUsers.forEach(id => this.activeChatIds.add(id));
     }
+    // Daily summary stats
+    this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: new Date().toDateString() };
+    // Fshare client
+    this.fshare = new FshareClient();
 
     this._setupCommands();
     this._setupErrorHandling();
@@ -152,11 +159,14 @@ Control your JDownloader remotely via Telegram!
 
 <b>📱 Device Commands:</b>
 /devices - List connected devices
-/select <code>&lt;device_id&gt;</code> - Select active device
 
-<b>ℹ️ Info Commands:</b>
+<b>📊 Info &amp; Reports:</b>
 /status - Full status overview
+/fshare - Check Fshare.vn account balance
+/report - Send daily summary now
 /help - Show this help message
+
+<b>💡 Tip:</b> Just paste any URL (fshare.vn, etc.) to auto-add!
       `.trim();
 
       await this._send(chatId, welcome);
@@ -520,6 +530,63 @@ Control your JDownloader remotely via Telegram!
       }
     });
 
+    // /fshare - Check Fshare.vn account info
+    this.bot.onText(/\/fshare/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      if (!this.config.fshareEmail || !this.config.fsharePassword) {
+        return this._send(chatId, '⚠️ Fshare credentials not configured.\nAdd <code>FSHARE_EMAIL</code> and <code>FSHARE_PASSWORD</code> to your .env file.');
+      }
+
+      try {
+        await this._send(chatId, '⏳ Fetching Fshare account info...');
+        await this.fshare.login(this.config.fshareEmail, this.config.fsharePassword);
+        const profile = await this.fshare.getProfile();
+
+        const user = profile.data || profile;
+        const bandwidth = user.bandwidth || 0;
+        const usedBandwidth = user.used_bandwidth || 0;
+        const remainingBandwidth = bandwidth - usedBandwidth;
+        const accountType = FshareClient.formatAccountType(user.account_type);
+        const expireDate = user.expire_date ? new Date(user.expire_date * 1000).toLocaleDateString('vi-VN') : 'N/A';
+
+        let text = `🔗 <b>Fshare.vn Account</b>\n\n`;
+        text += `👤 Email: <code>${this._escapeHtml(user.email || this.config.fshareEmail)}</code>\n`;
+        text += `🏷️ Account: <b>${accountType}</b>\n`;
+        if (expireDate !== 'N/A') {
+          text += `📅 Expires: <b>${expireDate}</b>\n`;
+        }
+        text += `\n📊 <b>Bandwidth:</b>\n`;
+        if (bandwidth > 0) {
+          const usedPercent = Math.round((usedBandwidth / bandwidth) * 100);
+          text += `   Total: ${FshareClient.formatBytes(bandwidth)}\n`;
+          text += `   Used: ${FshareClient.formatBytes(usedBandwidth)} (${usedPercent}%)\n`;
+          text += `   Remaining: <b>${FshareClient.formatBytes(remainingBandwidth)}</b>\n`;
+          text += `   ${this._makeProgressBar(usedPercent)} ${usedPercent}%\n`;
+        } else {
+          text += `   Unlimited or not available\n`;
+        }
+
+        await this._send(chatId, text);
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
+    // /report - Send daily summary now
+    this.bot.onText(/\/report/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      try {
+        await this._send(chatId, '📊 Generating report...');
+        await this._sendDailySummary();
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
     // Handle plain URLs sent to the bot (auto-add)
     this.bot.on('message', async (msg) => {
       const chatId = msg.chat.id;
@@ -674,16 +741,40 @@ Control your JDownloader remotely via Telegram!
         }
 
         const newlyFinished = [];
+        const newlyFailed = [];
 
         for (const pkg of packages) {
           const pkgId = pkg.uuid || pkg.name;
+
+          // Check for newly completed downloads
           if (pkg.finished && !this.knownFinishedPackages.has(pkgId)) {
             newlyFinished.push(pkg);
             this.knownFinishedPackages.add(pkgId);
           }
+
+          // Check for failed downloads (status contains error keywords)
+          const isFailed = pkg.status && (
+            pkg.status.toLowerCase().includes('error') ||
+            pkg.status.toLowerCase().includes('failed') ||
+            pkg.status.toLowerCase().includes('lỗi') ||
+            pkg.status === 'Error'
+          );
+          if (isFailed && !pkg.finished && !this.knownFailedPackages.has(pkgId)) {
+            newlyFailed.push(pkg);
+            this.knownFailedPackages.add(pkgId);
+          }
         }
 
+        // Handle newly completed downloads
         if (newlyFinished.length > 0) {
+          // Update daily stats
+          const today = new Date().toDateString();
+          if (this.dailyStats.date !== today) {
+            this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: today };
+          }
+          this.dailyStats.completed += newlyFinished.length;
+          this.dailyStats.totalBytes += newlyFinished.reduce((sum, p) => sum + (p.bytesTotal || 0), 0);
+
           // Build notification message
           let msg = `✅ <b>${newlyFinished.length} download(s) completed!</b>\n\n`;
           newlyFinished.forEach((pkg, i) => {
@@ -707,7 +798,6 @@ Control your JDownloader remotely via Telegram!
               console.log(`✅ Removed ${uuidsToRemove.length} finished package(s) from list (files kept)`);
             } catch (e) {
               console.error('Failed to remove finished downloads:', e.message);
-              // Try cleanup as fallback
               try {
                 await this.jd.cleanupFinished(device.id);
                 removed = true;
@@ -726,6 +816,30 @@ Control your JDownloader remotely via Telegram!
             await this._send(chatId, msg);
           }
         }
+
+        // Handle failed downloads
+        if (newlyFailed.length > 0) {
+          // Update daily stats
+          const today = new Date().toDateString();
+          if (this.dailyStats.date !== today) {
+            this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: today };
+          }
+          this.dailyStats.failed += newlyFailed.length;
+
+          let errMsg = `❌ <b>${newlyFailed.length} download(s) failed!</b>\n\n`;
+          newlyFailed.forEach((pkg, i) => {
+            errMsg += `${i + 1}. 📁 <b>${this._escapeHtml(pkg.name || 'Unknown')}</b>\n`;
+            if (pkg.status) {
+              errMsg += `   Status: <code>${this._escapeHtml(pkg.status)}</code>\n`;
+            }
+            errMsg += '\n';
+          });
+          errMsg += '💡 Use /downloads to see details or /retry to retry failed downloads.';
+
+          for (const chatId of this.activeChatIds) {
+            await this._send(chatId, errMsg);
+          }
+        }
       } catch (e) {
         // Silently ignore monitor errors (device offline, etc.)
         if (e.message && !e.message.includes('No online')) {
@@ -739,6 +853,79 @@ Control your JDownloader remotely via Telegram!
     // Run first check immediately to initialize known packages
     setTimeout(check, 5000);
     console.log(`📡 Download monitor started (checking every ${POLL_INTERVAL / 1000}s)`);
+  }
+
+  /**
+   * Send daily summary report
+   */
+  async _sendDailySummary() {
+    if (this.activeChatIds.size === 0) return;
+
+    const today = new Date().toLocaleDateString('vi-VN', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+
+    let msg = `📊 <b>Báo cáo hàng ngày</b>\n`;
+    msg += `📅 ${today}\n\n`;
+
+    if (this.dailyStats.completed === 0 && this.dailyStats.failed === 0) {
+      msg += `📭 Không có hoạt động tải xuống nào hôm nay.`;
+    } else {
+      msg += `✅ Hoàn thành: <b>${this.dailyStats.completed}</b> file\n`;
+      msg += `❌ Thất bại: <b>${this.dailyStats.failed}</b> file\n`;
+      if (this.dailyStats.totalBytes > 0) {
+        msg += `💾 Tổng dung lượng: <b>${JDownloaderClient.formatBytes(this.dailyStats.totalBytes)}</b>\n`;
+      }
+    }
+
+    // Get current download queue status
+    try {
+      const device = await this._getDefaultDevice();
+      const packages = await this.jd.getDownloads(device.id);
+      const active = (packages || []).filter(p => !p.finished);
+      if (active.length > 0) {
+        msg += `\n⏳ Đang chờ/tải: <b>${active.length}</b> file`;
+      }
+    } catch (e) {
+      // Ignore
+    }
+
+    for (const chatId of this.activeChatIds) {
+      await this._send(chatId, msg);
+    }
+
+    // Reset daily stats
+    this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: new Date().toDateString() };
+    console.log('📊 Daily summary sent');
+  }
+
+  /**
+   * Schedule daily report
+   */
+  _scheduleDailyReport() {
+    const reportTime = this.config.dailyReportTime || '08:00';
+    const [hours, minutes] = reportTime.split(':').map(Number);
+
+    const scheduleNext = () => {
+      const now = new Date();
+      const next = new Date();
+      next.setHours(hours, minutes, 0, 0);
+
+      // If the time has already passed today, schedule for tomorrow
+      if (next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+
+      const delay = next - now;
+      console.log(`📅 Daily report scheduled for ${next.toLocaleString('vi-VN')} (in ${Math.round(delay / 60000)} minutes)`);
+
+      setTimeout(async () => {
+        await this._sendDailySummary();
+        scheduleNext(); // Schedule next day
+      }, delay);
+    };
+
+    scheduleNext();
   }
 
   /**
@@ -771,6 +958,11 @@ Control your JDownloader remotely via Telegram!
       // Start download completion monitor
       this._startDownloadMonitor();
 
+      // Schedule daily report
+      if (this.config.dailyReportTime) {
+        this._scheduleDailyReport();
+      }
+
       console.log('\n🚀 Bot is running! Press Ctrl+C to stop.\n');
     } catch (error) {
       console.error('❌ Startup error:', error.message);
@@ -782,6 +974,9 @@ Control your JDownloader remotely via Telegram!
       console.log('⚠️  Continuing anyway - bot will retry on first command.\n');
       // Still start the monitor even if initial device listing failed
       this._startDownloadMonitor();
+      if (this.config.dailyReportTime) {
+        this._scheduleDailyReport();
+      }
     }
   }
 }

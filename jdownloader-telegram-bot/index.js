@@ -25,7 +25,12 @@ const config = {
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
   jdEmail: process.env.JD_EMAIL,
   jdPassword: process.env.JD_PASSWORD,
-  allowedUsers: allowedUsers
+  allowedUsers: allowedUsers,
+  // Optional Fshare credentials
+  fshareEmail: process.env.FSHARE_EMAIL || null,
+  fsharePassword: process.env.FSHARE_PASSWORD || null,
+  // Daily report time (e.g. "08:00")
+  dailyReportTime: process.env.DAILY_REPORT_TIME || null
 };
 
 const bot = new JDownloaderTelegramBot(config);

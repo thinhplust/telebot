@@ -122,6 +122,11 @@ class FshareClient {
       });
 
       const data = response.data;
+      // Debug: log raw response to understand structure
+      if (pageIndex === 0) {
+        console.log(`[Fshare] getFolderContents(${linkcode}) raw:`, JSON.stringify(data).substring(0, 500));
+      }
+
       // API returns { items: [...], total: N } or array directly
       if (Array.isArray(data)) return { items: data, total: data.length };
       return {
@@ -137,11 +142,38 @@ class FshareClient {
   }
 
   /**
+   * Determine if a Fshare API item is a folder (not a file)
+   * Fshare API uses: type=0 for folder, type=1 for file (or mimetype checks)
+   * @param {object} item
+   * @returns {boolean}
+   */
+  static isFolder(item) {
+    // type: 0 = folder, 1 = file (most common Fshare API convention)
+    if (item.type === 0) return true;
+    if (item.type === 1) return false;
+    // mimetype checks
+    if (item.mimetype === 'folder' || item.mimetype === 'application/x-directory') return true;
+    // explicit folder flag
+    if (item.folder === true || item.is_folder === true || item.isFolder === true) return true;
+    // URL-based detection: if URL contains /folder/ it's a folder
+    if (item.url && item.url.includes('/folder/')) return true;
+    // If it has no size and has a linkcode that looks like a folder
+    if (!item.size && item.linkcode && !item.mimetype) return true;
+    return false;
+  }
+
+  /**
    * Recursively get ALL files in a folder (handles pagination and subfolders)
    * @param {string} linkcode - folder linkcode
+   * @param {number} depth - recursion depth limit (default 5)
    * @returns {Promise<Array>} flat list of file objects
    */
-  async getAllFilesInFolder(linkcode) {
+  async getAllFilesInFolder(linkcode, depth = 0) {
+    if (depth > 5) {
+      console.warn(`[Fshare] Max recursion depth reached for linkcode: ${linkcode}`);
+      return [];
+    }
+
     const allFiles = [];
     let pageIndex = 0;
     const limit = 60;
@@ -151,11 +183,14 @@ class FshareClient {
       if (!items || items.length === 0) break;
 
       for (const item of items) {
-        if (item.type === 1 || item.mimetype === 'folder' || item.folder) {
+        console.log(`[Fshare] item: name="${item.name}" type=${item.type} mimetype=${item.mimetype} size=${item.size} url=${item.url}`);
+
+        if (FshareClient.isFolder(item)) {
           // It's a subfolder — recurse
           const subLinkcode = item.linkcode || FshareClient.extractLinkcode(item.url || '');
-          if (subLinkcode) {
-            const subFiles = await this.getAllFilesInFolder(subLinkcode);
+          if (subLinkcode && subLinkcode !== linkcode) {
+            console.log(`[Fshare] Recursing into subfolder: ${item.name} (${subLinkcode})`);
+            const subFiles = await this.getAllFilesInFolder(subLinkcode, depth + 1);
             allFiles.push(...subFiles);
           }
         } else {
@@ -165,7 +200,7 @@ class FshareClient {
       }
 
       // Check if there are more pages
-      if (items.length < limit || allFiles.length >= total) break;
+      if (items.length < limit) break;
       pageIndex++;
     }
 

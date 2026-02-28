@@ -1219,6 +1219,49 @@ Control your JDownloader remotely via Telegram!
   }
 
   /**
+   * Register bot commands with Telegram for command suggestions
+   * Users will see these when they type "/" in the chat
+   */
+  async _registerBotCommands() {
+    const commands = [
+      // Downloads
+      { command: 'downloads', description: '📥 Xem danh sách tải xuống' },
+      { command: 'add', description: '➕ Thêm link tải (dán URL trực tiếp cũng được)' },
+      { command: 'start_dl', description: '▶️ Bắt đầu tải xuống' },
+      { command: 'stop_dl', description: '⏹️ Dừng tải xuống' },
+      { command: 'pause_dl', description: '⏸️ Tạm dừng tải xuống' },
+      { command: 'resume_dl', description: '▶️ Tiếp tục tải xuống' },
+      { command: 'speed', description: '⚡ Xem tốc độ tải hiện tại' },
+      { command: 'state', description: '🔄 Xem trạng thái download controller' },
+      { command: 'cleanup', description: '🧹 Xóa các tải đã hoàn thành' },
+      // Status
+      { command: 'status', description: '📊 Tổng quan trạng thái đầy đủ' },
+      { command: 'devices', description: '📱 Danh sách thiết bị JDownloader' },
+      // Link Grabber
+      { command: 'grabber', description: '🔗 Xem Link Grabber' },
+      { command: 'grab_start', description: '✅ Chuyển Link Grabber sang tải xuống' },
+      { command: 'grab_clear', description: '🗑️ Xóa Link Grabber' },
+      // Fshare
+      { command: 'fshare', description: '🔗 Kiểm tra tài khoản Fshare.vn' },
+      { command: 'watch_folder', description: '📂 Theo dõi thư mục Fshare tự động' },
+      { command: 'watched_folders', description: '📋 Danh sách thư mục đang theo dõi' },
+      { command: 'unwatch_folder', description: '❌ Dừng theo dõi thư mục Fshare' },
+      { command: 'check_folders', description: '🔍 Kiểm tra thư mục ngay bây giờ' },
+      { command: 'rescan_folder', description: '🔄 Quét lại thư mục từ đầu' },
+      // Reports
+      { command: 'report', description: '📊 Gửi báo cáo hàng ngày ngay' },
+      { command: 'help', description: '❓ Hiển thị trợ giúp' }
+    ];
+
+    try {
+      await this.bot.setMyCommands(commands);
+      console.log(`✅ Registered ${commands.length} bot commands for suggestions`);
+    } catch (e) {
+      console.warn('⚠️ Failed to register bot commands:', e.message);
+    }
+  }
+
+  /**
    * Start the bot
    */
   async start() {
@@ -1228,6 +1271,9 @@ Control your JDownloader remotely via Telegram!
       // Test Telegram connection
       const me = await this.bot.getMe();
       console.log(`✅ Telegram bot connected: @${me.username}`);
+
+      // Register bot commands for Telegram command suggestions (shows when user types /)
+      await this._registerBotCommands();
 
       // Test JDownloader connection
       console.log('🔌 Connecting to MyJDownloader...');

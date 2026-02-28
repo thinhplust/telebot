@@ -810,6 +810,49 @@ Control your JDownloader remotely via Telegram!
       }
     });
 
+    // /folder_debug <url> - Show raw Fshare API response for debugging
+    this.bot.onText(/\/folder_debug(?:\s+(.+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      if (!this.config.fshareEmail || !this.config.fsharePassword) {
+        return this._send(chatId, '⚠️ Fshare credentials not configured.');
+      }
+
+      const url = match[1] ? match[1].trim() : '';
+      if (!url) {
+        return this._send(chatId, '❌ Usage: /folder_debug <code>&lt;fshare_folder_url&gt;</code>');
+      }
+
+      try {
+        await this._send(chatId, '⏳ Fetching raw folder data...');
+        await this.fshare.login(this.config.fshareEmail, this.config.fsharePassword);
+
+        const linkcode = FshareClient.extractLinkcode(url);
+        if (!linkcode) return this._send(chatId, '❌ Cannot extract linkcode from URL');
+
+        const { items } = await this.fshare.getFolderContents(linkcode, 0, 10);
+
+        let text = `🔍 <b>Folder Debug</b>\n`;
+        text += `Linkcode: <code>${linkcode}</code>\n`;
+        text += `Items found: ${items.length}\n\n`;
+
+        items.forEach((item, i) => {
+          text += `<b>${i + 1}. ${this._escapeHtml(item.name || 'N/A')}</b>\n`;
+          text += `   type: <code>${item.type}</code>\n`;
+          text += `   mimetype: <code>${item.mimetype || 'N/A'}</code>\n`;
+          text += `   size: <code>${item.size || 0}</code>\n`;
+          text += `   url: <code>${this._escapeHtml((item.url || '').substring(0, 60))}</code>\n`;
+          text += `   linkcode: <code>${item.linkcode || 'N/A'}</code>\n`;
+          text += `   isFolder: <code>${FshareClient.isFolder(item)}</code>\n\n`;
+        });
+
+        await this._send(chatId, text);
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
     // /report - Send daily summary now
     this.bot.onText(/\/report/, async (msg) => {
       const chatId = msg.chat.id;

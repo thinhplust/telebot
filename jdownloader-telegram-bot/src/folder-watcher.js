@@ -301,6 +301,127 @@ class FolderWatcher {
   }
 
   /**
+   * Register Fshare follow notification for a folder
+   * This tells Fshare to mark new files in this folder for notification
+   * @param {string} url - folder URL
+   * @returns {Promise<boolean>} true if registered
+   */
+  async registerFollowNotification(url) {
+    const FshareClient = require('./fshare');
+    const normalizedUrl = url.trim().split('?')[0];
+    const folder = this.state.folders[normalizedUrl];
+    if (!folder) return false;
+
+    try {
+      await this._ensureFshareLogin();
+      const linkcode = FshareClient.extractLinkcode(normalizedUrl);
+      if (!linkcode) return false;
+
+      // Get folder info to pass to followFolder
+      const folderInfo = await this.fshare.getFolderInfo(linkcode);
+      console.log(`[FolderWatcher] getFolderInfo(${linkcode}):`, JSON.stringify(folderInfo).substring(0, 200));
+
+      if (folderInfo) {
+        await this.fshare.followFolder(folderInfo);
+        folder.followRegistered = true;
+        this._saveState();
+        console.log(`✅ Registered Fshare follow notification for: ${folder.name}`);
+        return true;
+      }
+    } catch (e) {
+      console.warn(`⚠️ Failed to register follow notification for ${folder.name}: ${e.message}`);
+    }
+    return false;
+  }
+
+  /**
+   * Start polling Fshare notifications for new file alerts
+   * Polls every POLL_INTERVAL ms and triggers folder check when new files detected
+   * @param {number} pollIntervalMs - polling interval in ms (default 5 minutes)
+   * @param {Function} onNewFiles - callback(results) when new files found
+   */
+  startNotificationPoller(pollIntervalMs = 5 * 60 * 1000, onNewFiles) {
+    let lastCheckedAt = new Date().toISOString();
+
+    const poll = async () => {
+      try {
+        if (!this.fshare.token) {
+          await this._ensureFshareLogin();
+        }
+
+        const notifications = await this.fshare.getNotifications(50);
+        if (!notifications || notifications.length === 0) return;
+
+        console.log(`[FolderWatcher] Got ${notifications.length} notification(s) from Fshare`);
+
+        // Filter notifications newer than lastCheckedAt
+        const newNotifs = notifications.filter(n => {
+          const notifTime = n.created_at || n.created || n.time || n.timestamp;
+          if (!notifTime) return true; // include if no timestamp
+          return new Date(notifTime) > new Date(lastCheckedAt);
+        });
+
+        if (newNotifs.length === 0) return;
+
+        console.log(`[FolderWatcher] ${newNotifs.length} new notification(s) since ${lastCheckedAt}`);
+        lastCheckedAt = new Date().toISOString();
+
+        // Check which watched folders have new file notifications
+        const foldersToCheck = new Set();
+        const watchedFolders = this.getWatchedFolders();
+
+        for (const notif of newNotifs) {
+          console.log(`[FolderWatcher] Notification:`, JSON.stringify(notif).substring(0, 200));
+
+          // Try to match notification to a watched folder
+          for (const folder of watchedFolders) {
+            const FshareClient = require('./fshare');
+            const linkcode = FshareClient.extractLinkcode(folder.url);
+            // Check if notification mentions this folder's linkcode or path
+            const notifStr = JSON.stringify(notif).toLowerCase();
+            if (linkcode && notifStr.includes(linkcode.toLowerCase())) {
+              foldersToCheck.add(folder.url);
+            }
+          }
+        }
+
+        // If we can't match specific folders, check all watched folders
+        if (foldersToCheck.size === 0 && newNotifs.length > 0) {
+          watchedFolders.forEach(f => foldersToCheck.add(f.url));
+        }
+
+        if (foldersToCheck.size > 0) {
+          console.log(`[FolderWatcher] Checking ${foldersToCheck.size} folder(s) due to notifications`);
+          const results = [];
+          for (const folderUrl of foldersToCheck) {
+            try {
+              const result = await this.checkFolder(folderUrl);
+              const folder = this.state.folders[folderUrl.trim().split('?')[0]];
+              results.push({ url: folderUrl, name: folder?.name || folderUrl, ...result });
+            } catch (e) {
+              console.error(`[FolderWatcher] Error checking folder: ${e.message}`);
+            }
+          }
+
+          const totalNew = results.reduce((sum, r) => sum + (r.newFiles?.length || 0), 0);
+          if (totalNew > 0 && onNewFiles) {
+            await onNewFiles(results);
+          }
+        }
+      } catch (e) {
+        if (!e.message?.includes('Not logged in')) {
+          console.error('[FolderWatcher] Notification poll error:', e.message);
+        }
+      }
+    };
+
+    setInterval(poll, pollIntervalMs);
+    // First poll after 30 seconds
+    setTimeout(poll, 30000);
+    console.log(`🔔 FolderWatcher: notification poller started (every ${Math.round(pollIntervalMs / 60000)} min)`);
+  }
+
+  /**
    * Start the daily auto-check scheduler
    * @param {string} checkTime - "HH:MM" format (24h), e.g. "06:00"
    * @param {Function} onResult - callback(results) called after each check

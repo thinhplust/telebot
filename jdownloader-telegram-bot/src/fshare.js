@@ -265,6 +265,95 @@ class FshareClient {
   }
 
   /**
+   * Follow a folder to receive new-file notifications
+   * POST /api/v3/follows/new-file-noti
+   * @param {object} parentFolder - folder object from API (must have id, linkcode, etc.)
+   * @param {string[]} [fileLinkcodes] - specific file linkcodes to track (optional)
+   * @returns {Promise<object>}
+   */
+  async followFolder(parentFolder, fileLinkcodes = []) {
+    if (!this.token) throw new Error('Not logged in to Fshare');
+
+    try {
+      const response = await axios.post(`${FSHARE_API_V3}/follows/new-file-noti`, {
+        parent_folder: parentFolder,
+        file_change: fileLinkcodes
+      }, {
+        headers: {
+          ...this._authHeadersV3(),
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log(`[Fshare] followFolder response:`, JSON.stringify(response.data).substring(0, 200));
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(`Failed to follow folder: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get Fshare notifications (new file alerts, etc.)
+   * GET /api/v3/notifications/get?limit=100
+   * @param {number} limit - max notifications to fetch
+   * @param {string|null} since - ISO timestamp to get notifications after
+   * @returns {Promise<Array>} list of notification objects
+   */
+  async getNotifications(limit = 100, since = null) {
+    if (!this.token) throw new Error('Not logged in to Fshare');
+
+    try {
+      const params = { limit };
+      if (since) params.since = since;
+
+      const response = await axios.get(`${FSHARE_API_V3}/notifications/get`, {
+        params,
+        headers: this._authHeadersV3()
+      });
+
+      const data = response.data;
+      console.log(`[Fshare] getNotifications raw:`, JSON.stringify(data).substring(0, 300));
+
+      // API may return array or { items: [...] }
+      if (Array.isArray(data)) return data;
+      return data.items || data.data || data.notifications || [];
+    } catch (error) {
+      if (error.response) {
+        throw new Error(`Failed to get notifications: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get folder info by linkcode (needed for followFolder)
+   * GET /api/v3/files/folder?linkcode=CODE&page=1&per-page=1
+   * Returns the parent folder metadata
+   */
+  async getFolderInfo(linkcode) {
+    if (!this.token) throw new Error('Not logged in to Fshare');
+
+    try {
+      const response = await axios.get(`${FSHARE_API_V3}/files/folder`, {
+        params: { linkcode, page: 1, 'per-page': 1 },
+        headers: this._authHeadersV3()
+      });
+
+      const data = response.data;
+      // Return parent folder info
+      return data.parent || data.folder || data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(`Failed to get folder info: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Format bytes to human readable
    */
   static formatBytes(bytes) {

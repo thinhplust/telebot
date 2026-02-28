@@ -663,6 +663,15 @@ Control your JDownloader remotely via Telegram!
 
         text += `\n\n🔄 Bot will check daily for new files automatically.`;
         await this._send(chatId, text);
+
+        // Register Fshare follow notification (async, don't block)
+        this.folderWatcher.registerFollowNotification(url).then(registered => {
+          if (registered) {
+            console.log(`🔔 Follow notification registered for: ${url}`);
+          }
+        }).catch(e => {
+          console.warn(`⚠️ Could not register follow notification: ${e.message}`);
+        });
       } catch (error) {
         await this._handleError(chatId, error);
       }
@@ -1381,7 +1390,8 @@ Control your JDownloader remotely via Telegram!
     // Use DAILY_REPORT_TIME or default to 06:00 for folder checks
     const checkTime = this.config.folderCheckTime || this.config.dailyReportTime || '06:00';
 
-    this.folderWatcher.startScheduler(checkTime, async (results) => {
+    // Callback for when new files are found (used by both scheduler and notification poller)
+    const onNewFilesFound = async (results) => {
       const totalNew = results.reduce((sum, r) => sum + (r.newFiles ? r.newFiles.length : 0), 0);
 
       if (totalNew === 0 && results.every(r => !r.errors || r.errors.length === 0)) {
@@ -1413,7 +1423,12 @@ Control your JDownloader remotely via Telegram!
       for (const chatId of this.activeChatIds) {
         await this._send(chatId, msg);
       }
-    });
+    };
+
+    this.folderWatcher.startScheduler(checkTime, onNewFilesFound);
+
+    // Start Fshare notification poller (checks every 5 minutes for new file alerts)
+    this.folderWatcher.startNotificationPoller(5 * 60 * 1000, onNewFilesFound);
   }
 }
 

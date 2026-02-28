@@ -119,6 +119,23 @@ class FolderWatcher {
   }
 
   /**
+   * Reset the downloaded files state for a folder (keeps folder in watch list)
+   * Use this to force a full rescan on next check
+   * @param {string} url
+   * @returns {boolean} true if reset
+   */
+  resetFolderState(url) {
+    const normalizedUrl = url.trim().split('?')[0];
+    if (this.state.folders[normalizedUrl]) {
+      this.state.folders[normalizedUrl].downloadedFiles = {};
+      this.state.folders[normalizedUrl].lastChecked = null;
+      this._saveState();
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Get all watched folders
    * @returns {Array}
    */

@@ -760,6 +760,56 @@ Control your JDownloader remotely via Telegram!
       }
     });
 
+    // /rescan_folder <url> - Reset downloaded state and rescan a folder
+    this.bot.onText(/\/rescan_folder(?:\s+(.+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      if (!this.config.fshareEmail || !this.config.fsharePassword) {
+        return this._send(chatId, '⚠️ Fshare credentials not configured.');
+      }
+
+      const url = match[1] ? match[1].trim() : '';
+      if (!url) {
+        return this._send(chatId, '❌ Usage: /rescan_folder <code>&lt;fshare_folder_url&gt;</code>\n\nThis will reset the downloaded file history and rescan the folder from scratch.');
+      }
+
+      try {
+        // Reset the folder's downloaded files state
+        const reset = this.folderWatcher.resetFolderState(url);
+        if (!reset) {
+          return this._send(chatId, `❌ Folder not in watch list: <code>${this._escapeHtml(url)}</code>\n\nUse /watch_folder to add it first.`);
+        }
+
+        await this._send(chatId, `🔄 Reset folder state. Rescanning...\n<code>${this._escapeHtml(url)}</code>`);
+
+        const result = await this.folderWatcher.checkFolder(url);
+
+        let text = `✅ <b>Rescan complete!</b>\n\n`;
+        text += `📊 Found <b>${result.totalFiles}</b> file(s) total\n`;
+
+        if (result.newFiles.length > 0) {
+          text += `⬇️ Added <b>${result.newFiles.length}</b> file(s) to JDownloader:\n`;
+          result.newFiles.slice(0, 10).forEach((f, i) => {
+            text += `  ${i + 1}. ${this._escapeHtml(f.name)}`;
+            if (f.size > 0) text += ` (${JDownloaderClient.formatBytes(f.size)})`;
+            text += '\n';
+          });
+          if (result.newFiles.length > 10) text += `  <i>... and ${result.newFiles.length - 10} more</i>\n`;
+        } else {
+          text += `📭 No files found (folder may be empty or all items are subfolders)\n`;
+        }
+
+        if (result.errors.length > 0) {
+          text += `\n⚠️ ${result.errors.length} error(s) occurred.`;
+        }
+
+        await this._send(chatId, text);
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
     // /report - Send daily summary now
     this.bot.onText(/\/report/, async (msg) => {
       const chatId = msg.chat.id;

@@ -224,7 +224,7 @@ Control your JDownloader remotely via Telegram!
       }
     });
 
-    // /add <url> - Add download link
+    // /add <url> - Add download link (auto-detects Fshare folder URLs)
     this.bot.onText(/\/add (.+)/, async (msg, match) => {
       const chatId = msg.chat.id;
       if (!this._isAuthorized(chatId)) {
@@ -237,12 +237,65 @@ Control your JDownloader remotely via Telegram!
       }
 
       try {
-        await this._send(chatId, '⏳ Adding link(s) to JDownloader...');
-        const device = await this._getDefaultDevice();
-        await this.jd.addLinks(device.id, links);
+        // Split into individual URLs
+        const urls = links.split(/\s+/).filter(u => u.startsWith('http'));
+        const folderUrls = urls.filter(u => u.includes('fshare.vn/folder/'));
+        const fileUrls = urls.filter(u => !u.includes('fshare.vn/folder/'));
 
-        const urlCount = links.split(/\s+/).filter(u => u.startsWith('http')).length || 1;
-        await this._send(chatId, `✅ Successfully added <b>${urlCount}</b> link(s) to JDownloader!\n\nDevice: <code>${device.name}</code>`);
+        // Handle Fshare folder URLs with FolderWatcher
+        if (folderUrls.length > 0 && this.config.fshareEmail && this.config.fsharePassword) {
+          for (const folderUrl of folderUrls) {
+            await this._send(chatId, `📂 Detected Fshare folder. Adding to watch list and scanning...\n<code>${this._escapeHtml(folderUrl)}</code>`);
+            const { isNew, folder } = this.folderWatcher.addFolder(folderUrl);
+
+            if (!isNew) {
+              const count = this.folderWatcher.getDownloadedCount(folderUrl);
+              await this._send(chatId, `ℹ️ Folder already in watch list (${count} file(s) downloaded).\nUse /check_folders to check for new files.`);
+            } else {
+              const result = await this.folderWatcher.checkFolder(folderUrl);
+              let text = `✅ <b>Folder added and scanned!</b>\n`;
+              text += `📊 Found <b>${result.totalFiles}</b> file(s)\n`;
+              if (result.newFiles.length > 0) {
+                text += `⬇️ Added <b>${result.newFiles.length}</b> file(s) to JDownloader:\n`;
+                result.newFiles.slice(0, 5).forEach((f, i) => {
+                  text += `  ${i + 1}. ${this._escapeHtml(f.name)}`;
+                  if (f.size > 0) text += ` (${JDownloaderClient.formatBytes(f.size)})`;
+                  text += '\n';
+                });
+                if (result.newFiles.length > 5) text += `  <i>... and ${result.newFiles.length - 5} more</i>\n`;
+              } else {
+                text += `📭 No new files found\n`;
+              }
+              text += `\n🔄 Bot will check daily for new files.`;
+              await this._send(chatId, text);
+
+              // Register follow notification
+              this.folderWatcher.registerFollowNotification(folderUrl).catch(e =>
+                console.warn(`⚠️ Could not register follow notification: ${e.message}`)
+              );
+            }
+          }
+        } else if (folderUrls.length > 0) {
+          // No Fshare credentials — add folder URLs to JDownloader as-is
+          const device = await this._getDefaultDevice();
+          await this.jd.addLinks(device.id, folderUrls.join('\n'));
+          await this._send(chatId, `✅ Added ${folderUrls.length} folder link(s) to JDownloader.\n💡 Configure FSHARE_EMAIL/PASSWORD to auto-scan folder contents.`);
+        }
+
+        // Handle regular file URLs
+        if (fileUrls.length > 0) {
+          await this._send(chatId, '⏳ Adding link(s) to JDownloader...');
+          const device = await this._getDefaultDevice();
+          await this.jd.addLinks(device.id, fileUrls.join('\n'));
+          await this._send(chatId, `✅ Successfully added <b>${fileUrls.length}</b> link(s) to JDownloader!\n\nDevice: <code>${device.name}</code>`);
+        } else if (folderUrls.length === 0) {
+          // Fallback: treat entire input as links
+          await this._send(chatId, '⏳ Adding link(s) to JDownloader...');
+          const device = await this._getDefaultDevice();
+          await this.jd.addLinks(device.id, links);
+          const urlCount = links.split(/\s+/).filter(u => u.startsWith('http')).length || 1;
+          await this._send(chatId, `✅ Successfully added <b>${urlCount}</b> link(s) to JDownloader!\n\nDevice: <code>${device.name}</code>`);
+        }
       } catch (error) {
         await this._handleError(chatId, error);
       }

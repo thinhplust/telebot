@@ -91,14 +91,34 @@ class FshareClient {
 
   /**
    * Format account type
+   * Fshare API may return numeric (0,1,2) or string values
    */
   static formatAccountType(type) {
-    const types = {
+    // Numeric mapping
+    const numericTypes = {
       0: 'Free',
       1: 'VIP',
       2: 'Premium'
     };
-    return types[type] || `Type ${type}`;
+    // String mapping (observed from API responses)
+    const stringTypes = {
+      'free': 'Free',
+      'vip': 'VIP',
+      'premium': 'Premium',
+      'adsl2plus': 'VIP (ADSL2+)',
+      'adsl2': 'VIP (ADSL2)',
+      'ftth': 'VIP (FTTH)',
+      'vip1': 'VIP 1',
+      'vip2': 'VIP 2',
+      'vip3': 'VIP 3'
+    };
+
+    if (type === null || type === undefined) return 'Unknown';
+    if (typeof type === 'number') return numericTypes[type] || `Type ${type}`;
+    if (typeof type === 'string') {
+      return stringTypes[type.toLowerCase()] || type;
+    }
+    return String(type);
   }
 }
 

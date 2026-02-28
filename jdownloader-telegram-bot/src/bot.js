@@ -544,12 +544,26 @@ Control your JDownloader remotely via Telegram!
         await this.fshare.login(this.config.fshareEmail, this.config.fsharePassword);
         const profile = await this.fshare.getProfile();
 
+        // Log raw profile for debugging
+        console.log('Fshare profile raw:', JSON.stringify(profile, null, 2));
+
         const user = profile.data || profile;
-        const bandwidth = user.bandwidth || 0;
-        const usedBandwidth = user.used_bandwidth || 0;
-        const remainingBandwidth = bandwidth - usedBandwidth;
+
+        // Bandwidth fields: try multiple possible field names from Fshare API
+        const bandwidth = user.bandwidth || user.bandwidth_total || user.total_bandwidth || 0;
+        const usedBandwidth = user.used_bandwidth || user.bandwidth_used || user.used || 0;
+        const remainingBandwidth = user.remain_bandwidth || user.bandwidth_remain || (bandwidth - usedBandwidth) || 0;
+
         const accountType = FshareClient.formatAccountType(user.account_type);
-        const expireDate = user.expire_date ? new Date(user.expire_date * 1000).toLocaleDateString('vi-VN') : 'N/A';
+
+        // expire_date may be timestamp (seconds) or ISO string
+        let expireDate = 'N/A';
+        if (user.expire_date) {
+          const ts = typeof user.expire_date === 'number'
+            ? (user.expire_date > 1e10 ? user.expire_date : user.expire_date * 1000)
+            : Date.parse(user.expire_date);
+          if (!isNaN(ts)) expireDate = new Date(ts).toLocaleDateString('vi-VN');
+        }
 
         let text = `🔗 <b>Fshare.vn Account</b>\n\n`;
         text += `👤 Email: <code>${this._escapeHtml(user.email || this.config.fshareEmail)}</code>\n`;
@@ -564,6 +578,8 @@ Control your JDownloader remotely via Telegram!
           text += `   Used: ${FshareClient.formatBytes(usedBandwidth)} (${usedPercent}%)\n`;
           text += `   Remaining: <b>${FshareClient.formatBytes(remainingBandwidth)}</b>\n`;
           text += `   ${this._makeProgressBar(usedPercent)} ${usedPercent}%\n`;
+        } else if (remainingBandwidth > 0) {
+          text += `   Remaining: <b>${FshareClient.formatBytes(remainingBandwidth)}</b>\n`;
         } else {
           text += `   Unlimited or not available\n`;
         }

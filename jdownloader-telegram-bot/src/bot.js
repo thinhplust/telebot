@@ -831,7 +831,7 @@ Control your JDownloader remotely via Telegram!
         const linkcode = FshareClient.extractLinkcode(url);
         if (!linkcode) return this._send(chatId, '❌ Cannot extract linkcode from URL');
 
-        const { items } = await this.fshare.getFolderContents(linkcode, 0, 10);
+        const { items } = await this.fshare.getFolderContents(linkcode, 1, 10);
 
         let text = `🔍 <b>Folder Debug</b>\n`;
         text += `Linkcode: <code>${linkcode}</code>\n`;

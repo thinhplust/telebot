@@ -11,6 +11,7 @@
 const axios = require('axios');
 
 const FSHARE_API = 'https://api2.fshare.vn/api';
+const FSHARE_API_V3 = 'https://www.fshare.vn/api/v3';
 
 class FshareClient {
   constructor(appKey, userAgent) {
@@ -80,13 +81,24 @@ class FshareClient {
   }
 
   /**
-   * Get auth headers for authenticated requests
+   * Get auth headers for api2 requests
    */
   _authHeaders() {
     return {
       'User-Agent': this.userAgent,
       'Cookie': `session_id=${this.sessionId}`,
       'Token': this.token
+    };
+  }
+
+  /**
+   * Get auth headers for API v3 requests (uses Authorization Bearer)
+   */
+  _authHeadersV3() {
+    return {
+      'User-Agent': this.userAgent,
+      'Authorization': `Bearer ${this.token}`,
+      'Cookie': `session_id=${this.sessionId}`
     };
   }
 
@@ -102,54 +114,38 @@ class FshareClient {
   }
 
   /**
-   * List files/folders inside a Fshare folder by linkcode (top-level folder URL code)
+   * List files/folders inside a Fshare folder using API v3
+   * GET /api/v3/files/folder?linkcode=CODE&sort=type,name&page=1&per-page=50
    * @param {string} linkcode - folder linkcode (from URL)
-   * @param {number} pageIndex - page index (0-based)
-   * @param {number} limit - items per page (default 60)
-   * @returns {Promise<{items: Array, total: number}>}
+   * @param {number} page - page number (1-based)
+   * @param {number} perPage - items per page (default 50)
+   * @returns {Promise<{items: Array, total: number, pageCount: number}>}
    */
-  async getFolderContents(linkcode, pageIndex = 0, limit = 60) {
-    return this._listFolder({ linkcode }, pageIndex, limit);
-  }
-
-  /**
-   * List files/folders inside a Fshare subfolder by numeric ID
-   * @param {string|number} folderId - folder id from API response
-   * @param {number} pageIndex
-   * @param {number} limit
-   * @returns {Promise<{items: Array, total: number}>}
-   */
-  async getFolderContentsById(folderId, pageIndex = 0, limit = 60) {
-    return this._listFolder({ id: folderId }, pageIndex, limit);
-  }
-
-  /**
-   * Internal: call /fileops/list with given params
-   */
-  async _listFolder(params, pageIndex = 0, limit = 60) {
+  async getFolderContents(linkcode, page = 1, perPage = 50) {
     if (!this.token) throw new Error('Not logged in to Fshare');
 
     try {
-      const response = await axios.get(`${FSHARE_API}/fileops/list`, {
+      const response = await axios.get(`${FSHARE_API_V3}/files/folder`, {
         params: {
-          ...params,
-          pageIndex,
-          limit
+          linkcode,
+          sort: 'type,name',
+          page,
+          'per-page': perPage
         },
-        headers: this._authHeaders()
+        headers: this._authHeadersV3()
       });
 
       const data = response.data;
-      // Debug: log raw response to understand structure
-      if (pageIndex === 0) {
-        console.log(`[Fshare] _listFolder(${JSON.stringify(params)}) raw:`, JSON.stringify(data).substring(0, 500));
+      if (page === 1) {
+        console.log(`[Fshare v3] getFolderContents(${linkcode}) raw:`, JSON.stringify(data).substring(0, 500));
       }
 
-      // API returns { items: [...], total: N } or array directly
-      if (Array.isArray(data)) return { items: data, total: data.length };
+      // API v3 returns { items: [...], page: N, ... }
+      const items = data.items || data.data || (Array.isArray(data) ? data : []);
       return {
-        items: data.items || data.data || [],
-        total: data.total || data.count || 0
+        items,
+        total: data.total || items.length,
+        pageCount: data.pageCount || data.page_count || 1
       };
     } catch (error) {
       if (error.response) {
@@ -186,44 +182,40 @@ class FshareClient {
 
   /**
    * Recursively get ALL files in a folder (handles pagination and subfolders)
-   * @param {string} linkcode - top-level folder linkcode (from URL)
+   * @param {string} linkcode - folder linkcode (from URL, used for all levels in API v3)
    * @param {number} depth - recursion depth limit
-   * @param {string|null} folderId - numeric folder ID for subfolder navigation (null for root)
    * @returns {Promise<Array>} flat list of file objects
    */
-  async getAllFilesInFolder(linkcode, depth = 0, folderId = null) {
+  async getAllFilesInFolder(linkcode, depth = 0) {
     if (depth > 5) {
-      console.warn(`[Fshare] Max recursion depth reached`);
+      console.warn(`[Fshare] Max recursion depth reached for: ${linkcode}`);
       return [];
     }
 
     const allFiles = [];
-    let pageIndex = 0;
-    const limit = 60;
+    let page = 1;
+    const perPage = 50;
 
     while (true) {
-      // Use id-based listing for subfolders, linkcode for root
-      const { items } = folderId
-        ? await this.getFolderContentsById(folderId, pageIndex, limit)
-        : await this.getFolderContents(linkcode, pageIndex, limit);
+      const { items, pageCount } = await this.getFolderContents(linkcode, page, perPage);
 
       if (!items || items.length === 0) break;
 
       for (const item of items) {
-        console.log(`[Fshare] item: name="${item.name}" type=${item.type} id=${item.id} linkcode=${item.linkcode} size=${item.size}`);
+        console.log(`[Fshare v3] item: name="${item.name}" type=${item.type} linkcode=${item.linkcode} size=${item.size}`);
 
         if (FshareClient.isFolder(item)) {
-          // It's a subfolder — recurse using numeric id
-          const subId = item.id;
-          if (subId) {
-            console.log(`[Fshare] Recursing into subfolder: ${item.name} (id=${subId})`);
-            const subFiles = await this.getAllFilesInFolder(linkcode, depth + 1, subId);
+          // It's a subfolder — recurse using its linkcode (API v3 uses real linkcodes)
+          const subLinkcode = item.linkcode;
+          if (subLinkcode && subLinkcode !== linkcode) {
+            console.log(`[Fshare v3] Recursing into subfolder: ${item.name} (${subLinkcode})`);
+            const subFiles = await this.getAllFilesInFolder(subLinkcode, depth + 1);
             allFiles.push(...subFiles);
           } else {
-            console.warn(`[Fshare] Subfolder has no id, skipping: ${item.name}`);
+            console.warn(`[Fshare v3] Subfolder has no valid linkcode, skipping: ${item.name}`);
           }
         } else {
-          // It's a file — build URL from linkcode
+          // It's a file — build URL from linkcode if not present
           if (!item.url && item.linkcode) {
             item.url = `https://www.fshare.vn/file/${item.linkcode}`;
           }
@@ -232,8 +224,8 @@ class FshareClient {
       }
 
       // Check if there are more pages
-      if (items.length < limit) break;
-      pageIndex++;
+      if (page >= pageCount || items.length < perPage) break;
+      page++;
     }
 
     return allFiles;

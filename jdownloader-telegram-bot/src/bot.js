@@ -842,10 +842,21 @@ Control your JDownloader remotely via Telegram!
           text += `   type: <code>${item.type}</code>\n`;
           text += `   mimetype: <code>${item.mimetype || 'N/A'}</code>\n`;
           text += `   size: <code>${item.size || 0}</code>\n`;
-          text += `   url: <code>${this._escapeHtml((item.url || '').substring(0, 60))}</code>\n`;
+          text += `   url: <code>${this._escapeHtml((item.url || '').substring(0, 80))}</code>\n`;
           text += `   linkcode: <code>${item.linkcode || 'N/A'}</code>\n`;
-          text += `   isFolder: <code>${FshareClient.isFolder(item)}</code>\n\n`;
+          text += `   isFolder: <code>${FshareClient.isFolder(item)}</code>\n`;
+          // Show all keys for first item to understand structure
+          if (i === 0) {
+            text += `   <i>All keys: ${Object.keys(item).join(', ')}</i>\n`;
+          }
+          text += '\n';
         });
+
+        // Also show raw JSON of first item
+        if (items.length > 0) {
+          const rawJson = JSON.stringify(items[0]).substring(0, 300);
+          text += `\n<b>Raw JSON (item 1):</b>\n<code>${this._escapeHtml(rawJson)}</code>`;
+        }
 
         await this._send(chatId, text);
       } catch (error) {

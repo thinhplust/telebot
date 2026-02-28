@@ -202,12 +202,28 @@ class FolderWatcher {
       const fileLinkcode = file.linkcode || FshareClient.extractLinkcode(file.url || '');
       if (!fileLinkcode) continue;
 
+      // Safety check: skip if this item is actually a folder (double-check)
+      if (FshareClient.isFolder(file)) {
+        console.warn(`[FolderWatcher] Skipping folder item: ${file.name} (linkcode: ${fileLinkcode})`);
+        continue;
+      }
+
+      // Build file URL — must be a /file/ URL, not /folder/
+      const fileUrl = file.url && file.url.includes('/file/')
+        ? file.url
+        : `https://www.fshare.vn/file/${fileLinkcode}`;
+
+      // Extra safety: skip if URL still looks like a folder
+      if (fileUrl.includes('/folder/')) {
+        console.warn(`[FolderWatcher] Skipping folder URL: ${fileUrl}`);
+        continue;
+      }
+
       // Skip already downloaded files
       if (folder.downloadedFiles[fileLinkcode]) continue;
 
       // This is a new file — get direct download link and add to JDownloader
       try {
-        const fileUrl = file.url || `https://www.fshare.vn/file/${fileLinkcode}`;
         let downloadUrl = fileUrl;
 
         // Try to get VIP direct link if logged in

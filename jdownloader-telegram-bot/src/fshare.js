@@ -149,8 +149,12 @@ class FshareClient {
    */
   static isFolder(item) {
     // type: 0 = folder, 1 = file (most common Fshare API convention)
-    if (item.type === 0) return true;
-    if (item.type === 1) return false;
+    // Note: API may return type as string "0"/"1" or number 0/1
+    const typeNum = parseInt(item.type, 10);
+    if (!isNaN(typeNum)) {
+      if (typeNum === 0) return true;
+      if (typeNum === 1) return false;
+    }
     // mimetype checks
     if (item.mimetype === 'folder' || item.mimetype === 'application/x-directory') return true;
     // explicit folder flag

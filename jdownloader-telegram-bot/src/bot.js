@@ -6,6 +6,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const JDownloaderClient = require('./jdownloader');
 const FshareClient = require('./fshare');
+const FolderWatcher = require('./folder-watcher');
 
 class JDownloaderTelegramBot {
   constructor(config) {
@@ -30,6 +31,13 @@ class JDownloaderTelegramBot {
     this.dailyStats = { completed: 0, failed: 0, totalBytes: 0, date: new Date().toDateString() };
     // Fshare client (use configured app key and user agent)
     this.fshare = new FshareClient(config.fshareAppKey, config.fshareUserAgent);
+    // Folder watcher (monitors Fshare folders for new files)
+    this.folderWatcher = new FolderWatcher(this.fshare, this.jd, {
+      fshareEmail: config.fshareEmail,
+      fsharePassword: config.fsharePassword,
+      jdEmail: config.jdEmail,
+      jdPassword: config.jdPassword
+    });
 
     this._setupCommands();
     this._setupErrorHandling();
@@ -165,6 +173,12 @@ Control your JDownloader remotely via Telegram!
 /fshare - Check Fshare.vn account balance
 /report - Send daily summary now
 /help - Show this help message
+
+<b>📂 Fshare Folder Watch:</b>
+/watch_folder <code>&lt;url&gt;</code> - Watch folder for new files
+/watched_folders - List watched folders
+/unwatch_folder <code>&lt;url&gt;</code> - Stop watching a folder
+/check_folders - Check all folders now
 
 <b>💡 Tip:</b> Just paste any URL (fshare.vn, etc.) to auto-add!
       `.trim();
@@ -590,6 +604,162 @@ Control your JDownloader remotely via Telegram!
       }
     });
 
+    // /watch_folder <url> [name] - Watch a Fshare folder for new files
+    this.bot.onText(/\/watch_folder(?:\s+(.+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      if (!this.config.fshareEmail || !this.config.fsharePassword) {
+        return this._send(chatId, '⚠️ Fshare credentials not configured.\nAdd <code>FSHARE_EMAIL</code> and <code>FSHARE_PASSWORD</code> to your .env file.');
+      }
+
+      const args = match[1] ? match[1].trim() : '';
+      if (!args) {
+        return this._send(chatId, '❌ Usage: /watch_folder <code>&lt;fshare_folder_url&gt;</code> [optional name]\n\nExample:\n<code>/watch_folder https://www.fshare.vn/folder/ABCDEF123 My Movies</code>');
+      }
+
+      // First token is URL, rest is optional name
+      const parts = args.split(/\s+/);
+      const url = parts[0];
+      const name = parts.slice(1).join(' ') || '';
+
+      if (!url.includes('fshare.vn/folder/')) {
+        return this._send(chatId, '❌ Please provide a valid Fshare <b>folder</b> URL.\nExample: <code>https://www.fshare.vn/folder/ABCDEF123</code>');
+      }
+
+      try {
+        await this._send(chatId, '⏳ Adding folder to watch list and scanning for files...');
+
+        const { isNew, folder } = this.folderWatcher.addFolder(url, name);
+
+        if (!isNew) {
+          const count = this.folderWatcher.getDownloadedCount(url);
+          return this._send(chatId, `ℹ️ Folder already in watch list.\n📁 <b>${this._escapeHtml(folder.name)}</b>\n📊 ${count} file(s) already downloaded.`);
+        }
+
+        // Do an immediate first scan
+        const result = await this.folderWatcher.checkFolder(url);
+
+        let text = `✅ <b>Folder added to watch list!</b>\n\n`;
+        text += `📁 <b>${this._escapeHtml(folder.name || url)}</b>\n`;
+        text += `🔗 <code>${this._escapeHtml(url)}</code>\n\n`;
+        text += `📊 Found <b>${result.totalFiles}</b> file(s) total\n`;
+
+        if (result.newFiles.length > 0) {
+          text += `⬇️ Added <b>${result.newFiles.length}</b> new file(s) to JDownloader:\n`;
+          result.newFiles.slice(0, 5).forEach((f, i) => {
+            text += `  ${i + 1}. ${this._escapeHtml(f.name)}`;
+            if (f.size > 0) text += ` (${JDownloaderClient.formatBytes(f.size)})`;
+            text += '\n';
+          });
+          if (result.newFiles.length > 5) text += `  <i>... and ${result.newFiles.length - 5} more</i>\n`;
+        } else {
+          text += `📭 No new files to download (all already queued or folder is empty)\n`;
+        }
+
+        if (result.errors.length > 0) {
+          text += `\n⚠️ ${result.errors.length} error(s) occurred during scan.`;
+        }
+
+        text += `\n\n🔄 Bot will check daily for new files automatically.`;
+        await this._send(chatId, text);
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
+    // /watched_folders - List all watched folders
+    this.bot.onText(/\/watched_folders/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      const folders = this.folderWatcher.getWatchedFolders();
+
+      if (folders.length === 0) {
+        return this._send(chatId, '📭 No folders being watched.\n\nUse /watch_folder <code>&lt;url&gt;</code> to add one.');
+      }
+
+      let text = `📂 <b>Watched Fshare Folders</b> (${folders.length}):\n\n`;
+      folders.forEach((folder, i) => {
+        const count = Object.keys(folder.downloadedFiles).length;
+        const lastChecked = folder.lastChecked
+          ? new Date(folder.lastChecked).toLocaleString('vi-VN')
+          : 'Never';
+        text += `${i + 1}. 📁 <b>${this._escapeHtml(folder.name)}</b>\n`;
+        text += `   🔗 <code>${this._escapeHtml(folder.url)}</code>\n`;
+        text += `   📊 Downloaded: ${count} file(s)\n`;
+        text += `   🕐 Last checked: ${lastChecked}\n\n`;
+      });
+
+      text += `\nUse /check_folders to scan now, or /unwatch_folder &lt;url&gt; to remove.`;
+      await this._send(chatId, text);
+    });
+
+    // /unwatch_folder <url> - Remove a folder from watch list
+    this.bot.onText(/\/unwatch_folder(?:\s+(.+))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      const url = match[1] ? match[1].trim() : '';
+      if (!url) {
+        return this._send(chatId, '❌ Usage: /unwatch_folder <code>&lt;fshare_folder_url&gt;</code>');
+      }
+
+      const removed = this.folderWatcher.removeFolder(url);
+      if (removed) {
+        await this._send(chatId, `✅ Removed folder from watch list:\n<code>${this._escapeHtml(url)}</code>`);
+      } else {
+        await this._send(chatId, `❌ Folder not found in watch list:\n<code>${this._escapeHtml(url)}</code>\n\nUse /watched_folders to see the list.`);
+      }
+    });
+
+    // /check_folders - Manually trigger a check of all watched folders
+    this.bot.onText(/\/check_folders/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!this._isAuthorized(chatId)) return;
+
+      if (!this.config.fshareEmail || !this.config.fsharePassword) {
+        return this._send(chatId, '⚠️ Fshare credentials not configured.');
+      }
+
+      const folders = this.folderWatcher.getWatchedFolders();
+      if (folders.length === 0) {
+        return this._send(chatId, '📭 No folders being watched. Use /watch_folder to add one.');
+      }
+
+      try {
+        await this._send(chatId, `⏳ Checking ${folders.length} folder(s) for new files...`);
+        const results = await this.folderWatcher.checkAllFolders();
+
+        let text = `📂 <b>Folder Check Results</b>\n\n`;
+        let totalNew = 0;
+
+        results.forEach(r => {
+          const newCount = r.newFiles ? r.newFiles.length : 0;
+          totalNew += newCount;
+          const statusEmoji = r.errors && r.errors.length > 0 ? '⚠️' : (newCount > 0 ? '🆕' : '✅');
+          text += `${statusEmoji} <b>${this._escapeHtml(r.name)}</b>\n`;
+          if (newCount > 0) {
+            text += `   ⬇️ ${newCount} new file(s) added to JDownloader\n`;
+            r.newFiles.slice(0, 3).forEach(f => {
+              text += `   • ${this._escapeHtml(f.name)}\n`;
+            });
+            if (newCount > 3) text += `   <i>... and ${newCount - 3} more</i>\n`;
+          } else if (r.errors && r.errors.length > 0) {
+            text += `   ❌ Error: ${this._escapeHtml(r.errors[0].error)}\n`;
+          } else {
+            text += `   ✅ No new files\n`;
+          }
+          text += '\n';
+        });
+
+        text += `\n📊 Total new files added: <b>${totalNew}</b>`;
+        await this._send(chatId, text);
+      } catch (error) {
+        await this._handleError(chatId, error);
+      }
+    });
+
     // /report - Send daily summary now
     this.bot.onText(/\/report/, async (msg) => {
       const chatId = msg.chat.id;
@@ -979,6 +1149,11 @@ Control your JDownloader remotely via Telegram!
         this._scheduleDailyReport();
       }
 
+      // Start folder watcher scheduler (if Fshare credentials configured)
+      if (this.config.fshareEmail && this.config.fsharePassword) {
+        this._startFolderWatcherScheduler();
+      }
+
       console.log('\n🚀 Bot is running! Press Ctrl+C to stop.\n');
     } catch (error) {
       console.error('❌ Startup error:', error.message);
@@ -993,7 +1168,59 @@ Control your JDownloader remotely via Telegram!
       if (this.config.dailyReportTime) {
         this._scheduleDailyReport();
       }
+      if (this.config.fshareEmail && this.config.fsharePassword) {
+        this._startFolderWatcherScheduler();
+      }
     }
+  }
+
+  /**
+   * Start the folder watcher daily scheduler
+   */
+  _startFolderWatcherScheduler() {
+    const folders = this.folderWatcher.getWatchedFolders();
+    if (folders.length === 0) {
+      console.log('📂 FolderWatcher: no folders to watch (use /watch_folder to add)');
+    } else {
+      console.log(`📂 FolderWatcher: watching ${folders.length} folder(s)`);
+    }
+
+    // Use DAILY_REPORT_TIME or default to 06:00 for folder checks
+    const checkTime = this.config.folderCheckTime || this.config.dailyReportTime || '06:00';
+
+    this.folderWatcher.startScheduler(checkTime, async (results) => {
+      const totalNew = results.reduce((sum, r) => sum + (r.newFiles ? r.newFiles.length : 0), 0);
+
+      if (totalNew === 0 && results.every(r => !r.errors || r.errors.length === 0)) {
+        console.log('📂 FolderWatcher: no new files found');
+        return;
+      }
+
+      // Build notification message
+      let msg = `📂 <b>Folder Watch Update</b>\n\n`;
+
+      results.forEach(r => {
+        if (r.newFiles && r.newFiles.length > 0) {
+          msg += `📁 <b>${this._escapeHtml(r.name)}</b>\n`;
+          msg += `   ⬇️ ${r.newFiles.length} new file(s) added to JDownloader:\n`;
+          r.newFiles.slice(0, 5).forEach(f => {
+            msg += `   • ${this._escapeHtml(f.name)}`;
+            if (f.size > 0) msg += ` (${JDownloaderClient.formatBytes(f.size)})`;
+            msg += '\n';
+          });
+          if (r.newFiles.length > 5) msg += `   <i>... and ${r.newFiles.length - 5} more</i>\n`;
+          msg += '\n';
+        }
+      });
+
+      if (totalNew > 0) {
+        msg += `📊 Total: <b>${totalNew}</b> new file(s) added to JDownloader`;
+      }
+
+      for (const chatId of this.activeChatIds) {
+        await this._send(chatId, msg);
+      }
+    });
   }
 }
 

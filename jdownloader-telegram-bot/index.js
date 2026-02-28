@@ -32,7 +32,9 @@ const config = {
   fshareAppKey: process.env.FSHARE_APP_KEY || null,
   fshareUserAgent: process.env.FSHARE_USER_AGENT || null,
   // Daily report time (e.g. "08:00")
-  dailyReportTime: process.env.DAILY_REPORT_TIME || null
+  dailyReportTime: process.env.DAILY_REPORT_TIME || null,
+  // Folder check time (e.g. "06:00")
+  folderCheckTime: process.env.FOLDER_CHECK_TIME || null
 };
 
 const bot = new JDownloaderTelegramBot(config);

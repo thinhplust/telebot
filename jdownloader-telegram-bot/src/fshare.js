@@ -80,6 +80,132 @@ class FshareClient {
   }
 
   /**
+   * Get auth headers for authenticated requests
+   */
+  _authHeaders() {
+    return {
+      'User-Agent': this.userAgent,
+      'Cookie': `session_id=${this.sessionId}`,
+      'Token': this.token
+    };
+  }
+
+  /**
+   * Extract linkcode from a Fshare folder URL
+   * e.g. https://www.fshare.vn/folder/ABCDEF123 → "ABCDEF123"
+   * @param {string} url
+   * @returns {string|null}
+   */
+  static extractLinkcode(url) {
+    const match = url.match(/fshare\.vn\/(?:folder|file)\/([A-Za-z0-9]+)/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * List files/folders inside a Fshare folder
+   * @param {string} linkcode - folder linkcode (from URL)
+   * @param {number} pageIndex - page index (0-based)
+   * @param {number} limit - items per page (default 60)
+   * @returns {Promise<{items: Array, total: number}>}
+   */
+  async getFolderContents(linkcode, pageIndex = 0, limit = 60) {
+    if (!this.token) throw new Error('Not logged in to Fshare');
+
+    try {
+      const response = await axios.get(`${FSHARE_API}/fileops/list`, {
+        params: {
+          linkcode,
+          pageIndex,
+          limit
+        },
+        headers: this._authHeaders()
+      });
+
+      const data = response.data;
+      // API returns { items: [...], total: N } or array directly
+      if (Array.isArray(data)) return { items: data, total: data.length };
+      return {
+        items: data.items || data.data || [],
+        total: data.total || data.count || 0
+      };
+    } catch (error) {
+      if (error.response) {
+        throw new Error(`Failed to list folder: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Recursively get ALL files in a folder (handles pagination and subfolders)
+   * @param {string} linkcode - folder linkcode
+   * @returns {Promise<Array>} flat list of file objects
+   */
+  async getAllFilesInFolder(linkcode) {
+    const allFiles = [];
+    let pageIndex = 0;
+    const limit = 60;
+
+    while (true) {
+      const { items, total } = await this.getFolderContents(linkcode, pageIndex, limit);
+      if (!items || items.length === 0) break;
+
+      for (const item of items) {
+        if (item.type === 1 || item.mimetype === 'folder' || item.folder) {
+          // It's a subfolder — recurse
+          const subLinkcode = item.linkcode || FshareClient.extractLinkcode(item.url || '');
+          if (subLinkcode) {
+            const subFiles = await this.getAllFilesInFolder(subLinkcode);
+            allFiles.push(...subFiles);
+          }
+        } else {
+          // It's a file
+          allFiles.push(item);
+        }
+      }
+
+      // Check if there are more pages
+      if (items.length < limit || allFiles.length >= total) break;
+      pageIndex++;
+    }
+
+    return allFiles;
+  }
+
+  /**
+   * Get a direct (VIP) download link for a file
+   * @param {string} url - full Fshare file URL
+   * @param {string} [password] - file password if protected
+   * @returns {Promise<string>} direct download URL
+   */
+  async getDirectDownloadLink(url, password = '') {
+    if (!this.token) throw new Error('Not logged in to Fshare');
+
+    try {
+      const response = await axios.post(`${FSHARE_API}/session/download`, {
+        url,
+        password,
+        token: this.token
+      }, {
+        headers: {
+          ...this._authHeaders(),
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = response.data;
+      if (data.location) return data.location;
+      if (data.url) return data.url;
+      throw new Error(data.msg || 'No download URL in response');
+    } catch (error) {
+      if (error.response) {
+        throw new Error(`Failed to get download link: ${JSON.stringify(error.response.data)}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Format bytes to human readable
    */
   static formatBytes(bytes) {

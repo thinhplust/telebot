@@ -93,12 +93,20 @@ class FshareClient {
    * Format account type
    */
   static formatAccountType(type) {
-    const types = {
+    // Handle numeric account types
+    const numericTypes = {
       0: 'Free',
       1: 'VIP',
       2: 'Premium'
     };
-    return types[type] || `Type ${type}`;
+    if (type !== undefined && type !== null && numericTypes[type] !== undefined) {
+      return numericTypes[type];
+    }
+    // Handle string account types returned by the API (e.g. "ADSL2plus", "VIP", "Free")
+    if (typeof type === 'string' && type.trim() !== '') {
+      return type;
+    }
+    return type !== undefined && type !== null ? String(type) : 'Unknown';
   }
 }
 

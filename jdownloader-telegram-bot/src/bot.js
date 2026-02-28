@@ -36,7 +36,8 @@ class JDownloaderTelegramBot {
       fshareEmail: config.fshareEmail,
       fsharePassword: config.fsharePassword,
       jdEmail: config.jdEmail,
-      jdPassword: config.jdPassword
+      jdPassword: config.jdPassword,
+      maxFileSizeBytes: config.maxFileSizeBytes
     });
 
     this._setupCommands();
@@ -710,6 +711,8 @@ Control your JDownloader remotely via Telegram!
           text += `📭 No new files to download (all already queued or folder is empty)\n`;
         }
 
+        text = this._appendSkippedFiles(text, result.skippedFiles);
+
         if (result.errors.length > 0) {
           text += `\n⚠️ ${result.errors.length} error(s) occurred during scan.`;
         }
@@ -861,6 +864,8 @@ Control your JDownloader remotely via Telegram!
         } else {
           text += `📭 No files found (folder may be empty or all items are subfolders)\n`;
         }
+
+        text = this._appendSkippedFiles(text, result.skippedFiles);
 
         if (result.errors.length > 0) {
           text += `\n⚠️ ${result.errors.length} error(s) occurred.`;
@@ -1080,6 +1085,22 @@ Control your JDownloader remotely via Telegram!
     }
 
     return Array.from(urlSet).filter(u => u.startsWith('http'));
+  }
+
+  /**
+   * Append skipped files info to a message text
+   * @param {string} text - existing message text
+   * @param {Array} skippedFiles - array of { name, size, reason }
+   * @returns {string} updated text
+   */
+  _appendSkippedFiles(text, skippedFiles) {
+    if (!skippedFiles || skippedFiles.length === 0) return text;
+    text += `\n⚠️ <b>Skipped ${skippedFiles.length} file(s) (too large):</b>\n`;
+    skippedFiles.slice(0, 5).forEach(f => {
+      text += `  🚫 ${this._escapeHtml(f.name)} — ${f.reason}\n`;
+    });
+    if (skippedFiles.length > 5) text += `  <i>... and ${skippedFiles.length - 5} more</i>\n`;
+    return text;
   }
 
   /**

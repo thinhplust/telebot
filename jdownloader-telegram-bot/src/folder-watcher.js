@@ -23,6 +23,8 @@ class FolderWatcher {
     this.fshare = fshareClient;
     this.jd = jdClient;
     this.config = config;
+    // Max file size in bytes (default 30 GB). Files larger than this will be skipped.
+    this.maxFileSizeBytes = config.maxFileSizeBytes || (30 * 1024 * 1024 * 1024);
 
     /**
      * State structure:
@@ -196,6 +198,7 @@ class FolderWatcher {
     folder.lastChecked = new Date().toISOString();
 
     const newFiles = [];
+    const skippedFiles = []; // Files skipped due to size limit
     const errors = [];
 
     for (const file of allFiles) {
@@ -221,6 +224,22 @@ class FolderWatcher {
 
       // Skip already downloaded files
       if (folder.downloadedFiles[fileLinkcode]) continue;
+
+      // Check file size limit
+      const fileSize = parseInt(file.size, 10) || 0;
+      if (fileSize > 0 && fileSize > this.maxFileSizeBytes) {
+        const FshareClientClass = require('./fshare');
+        const JDownloaderClient = require('./jdownloader');
+        const sizeStr = JDownloaderClient.formatBytes(fileSize);
+        const limitStr = JDownloaderClient.formatBytes(this.maxFileSizeBytes);
+        console.warn(`[FolderWatcher] Skipping large file: ${file.name} (${sizeStr} > ${limitStr})`);
+        skippedFiles.push({
+          name: file.name || fileLinkcode,
+          size: fileSize,
+          reason: `File too large (${sizeStr} > ${limitStr})`
+        });
+        continue;
+      }
 
       // This is a new file — get direct download link and add to JDownloader
       try {
@@ -266,7 +285,7 @@ class FolderWatcher {
     }
 
     this._saveState();
-    return { newFiles, errors, totalFiles: allFiles.length };
+    return { newFiles, skippedFiles, errors, totalFiles: allFiles.length };
   }
 
   /**

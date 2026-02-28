@@ -34,7 +34,11 @@ const config = {
   // Daily report time (e.g. "08:00")
   dailyReportTime: process.env.DAILY_REPORT_TIME || null,
   // Folder check time (e.g. "06:00")
-  folderCheckTime: process.env.FOLDER_CHECK_TIME || null
+  folderCheckTime: process.env.FOLDER_CHECK_TIME || null,
+  // Max file size in bytes for folder watcher (default 30 GB)
+  maxFileSizeBytes: process.env.MAX_FILE_SIZE_GB
+    ? (parseFloat(process.env.MAX_FILE_SIZE_GB) * 1024 * 1024 * 1024)
+    : (30 * 1024 * 1024 * 1024)
 };
 
 const bot = new JDownloaderTelegramBot(config);

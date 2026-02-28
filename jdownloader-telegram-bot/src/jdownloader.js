@@ -193,6 +193,16 @@ class JDownloaderClient {
       const data = JSON.parse(decryptedStr);
       return data.list || [];
     } catch (error) {
+      // Auto-reconnect on token errors
+      if (error.response && (error.response.status === 403 ||
+          JSON.stringify(error.response.data).includes('TOKEN_INVALID'))) {
+        console.log('🔄 JDownloader session expired in listDevices, reconnecting...');
+        this.connected = false;
+        if (this.email && this.password) {
+          await this.connect(this.email, this.password);
+          return await this.listDevices();
+        }
+      }
       throw new Error(`Failed to list devices: ${error.message}`);
     }
   }
@@ -239,7 +249,22 @@ class JDownloaderClient {
       return result.data;
     } catch (error) {
       if (error.response) {
-        throw new Error(`Device API call failed: ${JSON.stringify(error.response.data)}`);
+        const errData = error.response.data;
+        const errStr = JSON.stringify(errData);
+
+        // Auto-reconnect on TOKEN_INVALID (session expired)
+        if (errStr.includes('TOKEN_INVALID') || errStr.includes('SESSION_INVALID') ||
+            error.response.status === 403) {
+          console.log('🔄 JDownloader session expired, reconnecting...');
+          this.connected = false;
+          if (this.email && this.password) {
+            await this.connect(this.email, this.password);
+            // Retry the call once after reconnect
+            return await this.callDevice(deviceId, interfaceName, methodName, params);
+          }
+        }
+
+        throw new Error(`Device API call failed: ${errStr}`);
       }
       throw new Error(`Device API call failed: ${error.message}`);
     }
